@@ -21,6 +21,7 @@
 #include "qwayland-appmenu.h"
 #include "qwayland-server-decoration-palette.h"
 #include "qwayland-xdg-session-management-v1.h"
+#include "qwayland-xdg-shell.h"
 
 #include <KWindowEffects>
 
