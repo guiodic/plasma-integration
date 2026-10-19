@@ -6,6 +6,12 @@
 #include "kwaylandintegration.h"
 
 #include <QExposeEvent>
+#include <QCryptographicHash>
+#include <QCoreApplication>
+#include <QVariant>
+#include <QDebug>
+#include <KConfigGroup>
+#include <KSharedConfig>
 #include <QGuiApplication>
 #include <QWindow>
 #include <qpa/qplatformnativeinterface.h>
@@ -14,11 +20,15 @@
 #include "qdbusmenubar_p.h"
 #include "qwayland-appmenu.h"
 #include "qwayland-server-decoration-palette.h"
+#include "qwayland-xdg-session-management-v1.h"
 
 #include <KWindowEffects>
 
 static const QByteArray s_schemePropertyName = QByteArrayLiteral("KDE_COLOR_SCHEME_PATH");
 static const QByteArray s_blurBehindPropertyName = QByteArrayLiteral("ENABLE_BLUR_BEHIND_HINT");
+static const QString s_sessionConfigGroup = QStringLiteral("XdgSessionManagement");
+static const char s_windowRestoreIdProperty[] = "KDE_SESSION_RESTORE_ID";
+static const char s_toplevelSessionAttachedProperty[] = "org.kde.plasma.integration.xdgSessionAttached";
 
 class AppMenuManager : public QWaylandClientExtensionTemplate<AppMenuManager>, public QtWayland::org_kde_kwin_appmenu_manager
 {
@@ -46,6 +56,47 @@ public:
     {
         release();
     }
+};
+
+
+class XdgSessionManagerV1 : public QWaylandClientExtensionTemplate<XdgSessionManagerV1>,
+                            public QtWayland::xdg_session_manager_v1
+{
+public:
+    XdgSessionManagerV1()
+        : QWaylandClientExtensionTemplate<XdgSessionManagerV1>(1)
+    {
+        QMetaObject::invokeMethod(this, "addRegistryListener");
+    }
+    ~XdgSessionManagerV1() override
+    {
+        if (isActive()) {
+            destroy();
+        }
+    }
+};
+
+class XdgSessionV1 : public QtWayland::xdg_session_v1
+{
+public:
+    void setIntegration(KWaylandIntegration *integration) { m_integration = integration; }
+    ~XdgSessionV1() override { destroy(); }
+protected:
+    void xdg_session_v1_created(const QString &id) override
+    {
+        if (m_integration) m_integration->saveSessionId(id);
+    }
+    void xdg_session_v1_restored() override {}
+    void xdg_session_v1_replaced() override { destroy(); }
+private:
+    KWaylandIntegration *m_integration = nullptr;
+};
+
+class XdgToplevelSessionV1 : public QtWayland::xdg_toplevel_session_v1
+{
+public:
+    using QtWayland::xdg_toplevel_session_v1::xdg_toplevel_session_v1;
+    ~XdgToplevelSessionV1() override { destroy(); }
 };
 
 class ServerSideDecorationPaletteManager : public QWaylandClientExtensionTemplate<ServerSideDecorationPaletteManager>,
