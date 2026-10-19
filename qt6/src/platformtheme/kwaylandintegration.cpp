@@ -10,10 +10,9 @@
 #include <QCoreApplication>
 #include <QGuiApplication>
 #include <QWindow>
+#include <QVariant>
 #include <KConfigGroup>
 #include <KSharedConfig>
-#include <QGuiApplication>
-#include <QWindow>
 #include <qpa/qplatformwindow_p.h>
 
 #include "qwayland-server-decoration-palette.h"
@@ -25,7 +24,6 @@
 static const QByteArray s_schemePropertyName = QByteArrayLiteral("KDE_COLOR_SCHEME_PATH");
 static const QByteArray s_blurBehindPropertyName = QByteArrayLiteral("ENABLE_BLUR_BEHIND_HINT");
 static const QString s_sessionConfigGroup = QStringLiteral("XdgSessionManagement");
-static const QString s_sessionIdKey = QStringLiteral("sessionId");
 static const char s_windowRestoreIdProperty[] = "KDE_SESSION_RESTORE_ID";
 
 class XdgSessionManagerV1 : public QWaylandClientExtensionTemplate<XdgSessionManagerV1, &QtWayland::xdg_session_manager_v1::destroy>,
@@ -42,9 +40,9 @@ public:
 class XdgSessionV1 : public QtWayland::xdg_session_v1
 {
 public:
-    explicit XdgSessionV1(KWaylandIntegration *integration)
-        : m_integration(integration)
+    void setIntegration(KWaylandIntegration *integration)
     {
+        m_integration = integration;
     }
 
     ~XdgSessionV1() override
@@ -55,7 +53,9 @@ public:
 protected:
     void xdg_session_v1_created(const QString &id) override
     {
-        m_integration->saveSessionId(id);
+        if (m_integration) {
+            m_integration->saveSessionId(id);
+        }
     }
 
     void xdg_session_v1_restored() override
@@ -68,7 +68,7 @@ protected:
     }
 
 private:
-    KWaylandIntegration *m_integration;
+    KWaylandIntegration *m_integration = nullptr;
 };
 
 class XdgToplevelSessionV1 : public QtWayland::xdg_toplevel_session_v1
@@ -158,6 +158,9 @@ bool KWaylandIntegration::eventFilter(QObject *watched, QEvent *event)
                 connect(waylandWindow, &QNativeInterface::Private::QWaylandWindow::surfaceDestroyed, this, [this, w] {
                     shellSurfaceDestroyed(w);
                 });
+                connect(waylandWindow, &QNativeInterface::Private::QWaylandWindow::surfaceRoleCreated, this, [this, w] {
+                    registerToplevelSession(w);
+                });
                 if (waylandWindow->surface()) {
                     shellSurfaceCreated(w);
                 }
@@ -212,7 +215,8 @@ void KWaylandIntegration::initializeSessionManagement()
 
     KConfigGroup group(KSharedConfig::openConfig(), s_sessionConfigGroup);
     m_sessionId = group.readEntry(appId, QString());
-    m_session.reset(new XdgSessionV1(this));
+    m_session.reset(new XdgSessionV1);
+    m_session->setIntegration(this);
     if (m_sessionId.isEmpty()) {
         m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_launch, QString()));
     } else {
@@ -281,7 +285,8 @@ void KWaylandIntegration::registerToplevelSession(QWindow *w)
         return;
     }
     m_toplevelSessionNames.insert(w, name);
-    auto *session = new XdgToplevelSessionV1(m_session->restore_toplevel(toplevel, name));
+    auto *session = new XdgToplevelSessionV1;
+    session->init(m_session->restore_toplevel(toplevel, name));
     // Keep the protocol object alive for as long as the QWindow exists.
     connect(w, &QObject::destroyed, this, [session] {
         delete session;
