@@ -45,6 +45,7 @@ private:
     QScopedPointer<XdgSessionV1> m_session;
     QString m_sessionId;
     QHash<QWindow *, QString> m_toplevelSessionNames;
+    QHash<QWindow *, XdgToplevelSessionV1 *> m_toplevelSessions;
 
     KdePlatformTheme *m_platformTheme;
 };
