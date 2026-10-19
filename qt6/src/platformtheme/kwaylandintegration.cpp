@@ -118,11 +118,6 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     : QObject()
     , m_platformTheme(platformTheme)
 {
-    // KDE's KMainWindow maps its window role to QtWayland's session restore ID.
-    // plasma-integration manages xdg-session restoration itself, so prevent
-    // KMainWindow from setting that role and triggering a duplicate association.
-    QCoreApplication::setAttribute(Qt::AA_DisableSessionManager);
-
     QCoreApplication::instance()->installEventFilter(this);
     initializeSessionManagement();
 }
@@ -313,24 +308,56 @@ void KWaylandIntegration::saveSessionId(const QString &id)
 QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
 {
     const QVariant explicitId = w->property(s_windowRestoreIdProperty);
+    QString name;
     if (explicitId.isValid() && !explicitId.toString().isEmpty()) {
-        return explicitId.toString();
+        // Honour application-provided IDs when possible. The collision check
+        // below also protects against applications reusing the same explicit ID.
+        name = explicitId.toString();
+    } else {
+        // Keep the identifier stable across runs for windows with a stable
+        // objectName. Titles and class/type are fallbacks, not guaranteed unique.
+        QString identity = w->objectName();
+        if (identity.isEmpty()) {
+            identity = w->title();
+        }
+        if (identity.isEmpty()) {
+            identity = QStringLiteral("%1:%2").arg(w->metaObject()->className()).arg(int(w->type()));
+        }
+
+        const QString appId = QGuiApplication::desktopFileName().isEmpty()
+            ? QCoreApplication::applicationName()
+            : QGuiApplication::desktopFileName();
+        const QByteArray material = (appId + QLatin1Char('/') + identity).toUtf8();
+        name = QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
     }
 
-    // objectName is the only Qt property intended to be a stable, application-defined object identifier.
-    QString identity = w->objectName();
-    if (identity.isEmpty()) {
-        identity = w->title();
-    }
-    if (identity.isEmpty()) {
-        identity = QStringLiteral("%1:%2").arg(w->metaObject()->className()).arg(int(w->type()));
+    // xdg-session-management requires every toplevel ID in a session to be
+    // unique. Different QWindows can have the same objectName/title (or the
+    // same explicit restore ID), so disambiguate against currently registered
+    // windows while retaining the original stable ID when there is no clash.
+    const QString baseName = name;
+    int suffix = 2;
+    auto nameInUse = [this, w](const QString &candidate) {
+        for (auto it = m_toplevelSessionNames.cbegin(); it != m_toplevelSessionNames.cend(); ++it) {
+            if (it.key() != w && it.value() == candidate) {
+                return true;
+            }
+        }
+        return false;
+    };
+    while (nameInUse(name)) {
+        name = baseName + QLatin1Char('-') + QString::number(suffix++);
     }
 
-    const QString appId = QGuiApplication::desktopFileName().isEmpty()
-        ? QCoreApplication::applicationName()
-        : QGuiApplication::desktopFileName();
-    const QByteArray material = (appId + QLatin1Char('/') + identity).toUtf8();
-    return QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
+    if (name != baseName) {
+        qWarning() << "xdg-session: duplicate toplevel identity; using unique ID"
+                   << "window=" << static_cast<void *>(w)
+                   << "objectName=" << w->objectName()
+                   << "title=" << w->title()
+                   << "originalName=" << baseName
+                   << "uniqueName=" << name;
+    }
+    return name;
 }
 
 void KWaylandIntegration::registerToplevelSession(QWindow *w)
