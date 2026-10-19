@@ -8,11 +8,14 @@
 
 #include "kdeplatformtheme.h"
 #include <QHash>
+#include <QString>
 #include <QObject>
 #include <QtWaylandClient/QWaylandClientExtensionTemplate>
 
 class QWindow;
 class ServerSideDecorationPaletteManager;
+class XdgSessionManagerV1;
+class XdgSessionV1;
 
 class KWaylandIntegration : public QObject
 {
@@ -32,7 +35,15 @@ private:
     void shellSurfaceDestroyed(QWindow *w);
 
     void installColorScheme(QWindow *w);
+    void initializeSessionManagement();
+    void registerToplevelSession(QWindow *w);
+    QString toplevelSessionName(QWindow *w) const;
+    void saveSessionId(const QString &id);
     QScopedPointer<ServerSideDecorationPaletteManager> m_paletteManager;
+    QScopedPointer<XdgSessionManagerV1> m_sessionManager;
+    QScopedPointer<XdgSessionV1> m_session;
+    QString m_sessionId;
+    QHash<QWindow *, QString> m_toplevelSessionNames;
 
     KdePlatformTheme *m_platformTheme;
 };
