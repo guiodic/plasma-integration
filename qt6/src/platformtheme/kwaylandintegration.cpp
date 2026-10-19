@@ -202,7 +202,16 @@ void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
 void KWaylandIntegration::initializeSessionManagement()
 {
     m_sessionManager.reset(new XdgSessionManagerV1);
-    if (!m_sessionManager->isActive()) {
+    connect(m_sessionManager.data(), &QWaylandClientExtensionTemplate<XdgSessionManagerV1, &QtWayland::xdg_session_manager_v1::destroy>::activeChanged,
+            this, &KWaylandIntegration::startSessionManagement);
+    if (m_sessionManager->isActive()) {
+        startSessionManagement();
+    }
+}
+
+void KWaylandIntegration::startSessionManagement()
+{
+    if (!m_sessionManager || !m_sessionManager->isActive() || m_session) {
         return;
     }
 
