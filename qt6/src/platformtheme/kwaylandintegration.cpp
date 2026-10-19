@@ -118,6 +118,11 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     : QObject()
     , m_platformTheme(platformTheme)
 {
+    // KDE's KMainWindow maps its window role to QtWayland's session restore ID.
+    // plasma-integration manages xdg-session restoration itself, so prevent
+    // KMainWindow from setting that role and triggering a duplicate association.
+    QCoreApplication::setAttribute(Qt::AA_DisableSessionManager);
+
     QCoreApplication::instance()->installEventFilter(this);
     initializeSessionManagement();
 }
