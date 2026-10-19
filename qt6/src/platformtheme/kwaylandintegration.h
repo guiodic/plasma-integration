@@ -25,6 +25,7 @@ public:
     ~KWaylandIntegration() override;
 
     void setPalette(QWindow *window, const QString &paletteName);
+    void saveSessionId(const QString &id);
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -38,7 +39,6 @@ private:
     void initializeSessionManagement();
     void registerToplevelSession(QWindow *w);
     QString toplevelSessionName(QWindow *w) const;
-    void saveSessionId(const QString &id);
     QScopedPointer<ServerSideDecorationPaletteManager> m_paletteManager;
     QScopedPointer<XdgSessionManagerV1> m_sessionManager;
     QScopedPointer<XdgSessionV1> m_session;
