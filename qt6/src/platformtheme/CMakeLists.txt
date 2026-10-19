@@ -42,6 +42,12 @@ qt6_generate_wayland_protocol_client_sources(KDEPlasmaPlatformTheme6
 
 target_sources(KDEPlasmaPlatformTheme6 PRIVATE ${platformtheme_SRCS})
 
+# QtWaylandClient private headers are installed in a versioned include directory.
+# The public Qt6::WaylandClient target does not add that directory.
+target_include_directories(KDEPlasmaPlatformTheme6 PRIVATE
+    "${Qt6WaylandClient_INCLUDE_DIRS}/${Qt6Core_VERSION}"
+)
+
 target_link_libraries(KDEPlasmaPlatformTheme6
     PRIVATE
         Qt6::Core
