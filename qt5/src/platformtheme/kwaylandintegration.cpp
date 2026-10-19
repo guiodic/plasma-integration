@@ -263,6 +263,143 @@ void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
     w->setProperty("org.kde.plasma.integration.palette", QVariant());
 }
 
+
+void KWaylandIntegration::initializeSessionManagement()
+{
+    m_sessionManager.reset(new XdgSessionManagerV1);
+    connect(m_sessionManager.data(), &QWaylandClientExtensionTemplate<XdgSessionManagerV1>::activeChanged,
+            this, &KWaylandIntegration::startSessionManagement);
+    if (m_sessionManager->isActive()) {
+        startSessionManagement();
+    }
+}
+
+void KWaylandIntegration::startSessionManagement()
+{
+    if (!m_sessionManager || !m_sessionManager->isActive() || m_session) {
+        return;
+    }
+
+    const QString appId = QGuiApplication::desktopFileName().isEmpty()
+        ? QCoreApplication::applicationName()
+        : QGuiApplication::desktopFileName();
+    if (appId.isEmpty()) {
+        return;
+    }
+
+    const auto config = KSharedConfig::openConfig();
+    KConfigGroup group(config, s_sessionConfigGroup);
+    m_sessionId = group.readEntry(appId, QString());
+    qDebug() << "xdg-session: start" << "appId=" << appId << "storedSessionId=" << m_sessionId;
+
+    m_session.reset(new XdgSessionV1);
+    m_session->setIntegration(this);
+    if (m_sessionId.isEmpty()) {
+        m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_launch, QString()));
+    } else {
+        m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_session_restore, m_sessionId));
+    }
+}
+
+void KWaylandIntegration::saveSessionId(const QString &id)
+{
+    if (id.isEmpty()) {
+        return;
+    }
+
+    const QString appId = QGuiApplication::desktopFileName().isEmpty()
+        ? QCoreApplication::applicationName()
+        : QGuiApplication::desktopFileName();
+    if (appId.isEmpty()) {
+        return;
+    }
+
+    m_sessionId = id;
+    const auto config = KSharedConfig::openConfig();
+    KConfigGroup group(config, s_sessionConfigGroup);
+    group.writeEntry(appId, id);
+    group.sync();
+    qDebug() << "xdg-session: saved session ID" << appId << id;
+}
+
+QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
+{
+    const QVariant explicitId = w->property(s_windowRestoreIdProperty);
+    QString name;
+    if (explicitId.isValid() && !explicitId.toString().isEmpty()) {
+        name = explicitId.toString();
+    } else {
+        QString identity = w->objectName();
+        if (identity.isEmpty()) {
+            identity = w->title();
+        }
+        if (identity.isEmpty()) {
+            identity = QStringLiteral("%1:%2").arg(w->metaObject()->className()).arg(int(w->type()));
+        }
+
+        const QString appId = QGuiApplication::desktopFileName().isEmpty()
+            ? QCoreApplication::applicationName()
+            : QGuiApplication::desktopFileName();
+        name = QString::fromLatin1(QCryptographicHash::hash((appId + QLatin1Char('/') + identity).toUtf8(),
+                                                             QCryptographicHash::Sha256).toHex());
+    }
+
+    const QString baseName = name;
+    int suffix = 2;
+    auto nameInUse = [this, w](const QString &candidate) {
+        for (auto it = m_toplevelSessionNames.cbegin(); it != m_toplevelSessionNames.cend(); ++it) {
+            if (it.key() != w && it.value() == candidate) {
+                return true;
+            }
+        }
+        return false;
+    };
+    while (nameInUse(name)) {
+        name = baseName + QLatin1Char('-') + QString::number(suffix++);
+    }
+    if (name != baseName) {
+        qWarning() << "xdg-session: duplicate toplevel identity; using unique ID" << baseName << name;
+    }
+    return name;
+}
+
+void KWaylandIntegration::registerToplevelSession(QWindow *w)
+{
+    if (!m_sessionManager || !m_sessionManager->isActive() || !m_session || !isRelevantTopLevel(w)) {
+        return;
+    }
+
+    QPlatformNativeInterface *native = qGuiApp->platformNativeInterface();
+    if (!native) {
+        return;
+    }
+    auto *toplevel = static_cast<xdg_toplevel *>(native->nativeResourceForWindow("xdg_toplevel", w));
+    if (!toplevel) {
+        return;
+    }
+    if (w->property(s_toplevelSessionAttachedProperty).toBool() || m_toplevelSessionNames.contains(w)) {
+        return;
+    }
+
+    const QString name = toplevelSessionName(w);
+    if (name.isEmpty()) {
+        return;
+    }
+
+    w->setProperty(s_toplevelSessionAttachedProperty, true);
+    m_toplevelSessionNames.insert(w, name);
+
+    auto *session = new XdgToplevelSessionV1;
+    session->init(m_session->restore_toplevel(toplevel, name));
+    m_toplevelSessions.insert(w, session);
+    connect(w, &QObject::destroyed, this, [this, w] {
+        delete m_toplevelSessions.take(w);
+        m_toplevelSessionNames.remove(w);
+    });
+
+    qDebug() << "xdg-session: restore_toplevel" << w << name;
+}
+
 void KWaylandIntegration::installColorScheme(QWindow *w)
 {
     if (!m_paletteManager) {
