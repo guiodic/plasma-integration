@@ -241,8 +241,15 @@ void KWaylandIntegration::startSessionManagement()
         return;
     }
 
-    KConfigGroup group(KSharedConfig::openConfig(), s_sessionConfigGroup);
+    const auto config = KSharedConfig::openConfig();
+    KConfigGroup group(config, s_sessionConfigGroup);
     m_sessionId = group.readEntry(appId, QString());
+
+    qDebug() << "xdg-session: start"
+             << "appId=" << appId
+             << "config=" << config->name()
+             << "storedSessionId=" << m_sessionId;
+
     m_session.reset(new XdgSessionV1);
     m_session->setIntegration(this);
     if (m_sessionId.isEmpty()) {
@@ -266,9 +273,20 @@ void KWaylandIntegration::saveSessionId(const QString &id)
     }
 
     m_sessionId = id;
-    KConfigGroup group(KSharedConfig::openConfig(), s_sessionConfigGroup);
+    const auto config = KSharedConfig::openConfig();
+    KConfigGroup group(config, s_sessionConfigGroup);
+
+    qDebug() << "xdg-session: save"
+             << "appId=" << appId
+             << "config=" << config->name()
+             << "sessionId=" << id;
+
     group.writeEntry(appId, id);
     group.sync();
+
+    qDebug() << "xdg-session: save complete"
+             << "appId=" << appId
+             << "storedSessionId=" << group.readEntry(appId, QString());
 }
 
 QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
