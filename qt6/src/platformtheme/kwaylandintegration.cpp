@@ -15,7 +15,6 @@
 #include <KConfigGroup>
 #include <KSharedConfig>
 #include <qpa/qplatformwindow_p.h>
-#include <QtWaylandClient/private/qwaylandwindow_p.h>
 
 #include "qwayland-server-decoration-palette.h"
 #include "qwayland-xdg-session-management-v1.h"
@@ -309,14 +308,12 @@ void KWaylandIntegration::registerToplevelSession(QWindow *w)
     w->setProperty(s_toplevelSessionAttachedProperty, true);
     m_toplevelSessionNames.insert(w, name);
 
-    auto *qtWaylandWindow = static_cast<QtWaylandClient::QWaylandWindow *>(waylandWindow);
     qWarning() << "xdg-session: restore_toplevel DISABLED FOR TEST"
                << "window=" << static_cast<void *>(w)
                << "surface=" << static_cast<void *>(waylandWindow->surface())
                << "toplevel=" << static_cast<void *>(toplevel)
                << "session=" << static_cast<void *>(m_session.data())
-               << "name=" << name
-               << "qtSessionRestoreId=" << qtWaylandWindow->sessionRestoreId();
+               << "name=" << name;
 
     // Diagnostic test: skip our restore_toplevel() request to check whether
     // Qt's own session-management support is already associating this toplevel.
