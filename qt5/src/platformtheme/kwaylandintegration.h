@@ -15,6 +15,9 @@ class QWindow;
 
 class AppMenuManager;
 class ServerSideDecorationPaletteManager;
+class XdgSessionManagerV1;
+class XdgSessionV1;
+class XdgToplevelSessionV1;
 
 class KWaylandIntegration : public QObject
 {
@@ -25,6 +28,7 @@ public:
 
     void setAppMenu(QWindow *window, const QString &serviceName, const QString &objectPath);
     void setPalette(QWindow *window, const QString &paletteName);
+    void saveSessionId(const QString &id);
 
     bool eventFilter(QObject *watched, QEvent *event) override;
 
@@ -35,8 +39,17 @@ private:
     void shellSurfaceDestroyed(QWindow *w);
 
     void installColorScheme(QWindow *w);
+    void initializeSessionManagement();
+    void startSessionManagement();
+    void registerToplevelSession(QWindow *w);
+    QString toplevelSessionName(QWindow *w) const;
     QScopedPointer<AppMenuManager> m_appMenuManager;
     QScopedPointer<ServerSideDecorationPaletteManager> m_paletteManager;
+    QScopedPointer<XdgSessionManagerV1> m_sessionManager;
+    QScopedPointer<XdgSessionV1> m_session;
+    QString m_sessionId;
+    QHash<QWindow *, QString> m_toplevelSessionNames;
+    QHash<QWindow *, XdgToplevelSessionV1 *> m_toplevelSessions;
 
     KdePlatformTheme *m_platformTheme;
 };
