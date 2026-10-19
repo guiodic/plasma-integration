@@ -224,6 +224,18 @@ void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
 
 void KWaylandIntegration::initializeSessionManagement()
 {
+    // QtWayland has its own experimental xdg-session-management client.
+    // Running both clients in the same process can associate one xdg_toplevel
+    // with two sessions, which is a fatal protocol error. When Qt's native
+    // client is explicitly enabled, leave session management to Qt instead.
+    const QByteArray qtSessionManager = qgetenv("QT_WAYLAND_ENABLE_XX_SESSION_MANAGER");
+    if (!qtSessionManager.isEmpty() && qtSessionManager != "0") {
+        qWarning() << "xdg-session: Qt native session management is enabled;"
+                      " disabling plasma-integration session management to avoid"
+                      " duplicate toplevel associations";
+        return;
+    }
+
     m_sessionManager.reset(new XdgSessionManagerV1);
     connect(m_sessionManager.data(), &QWaylandClientExtensionTemplate<XdgSessionManagerV1, &QtWayland::xdg_session_manager_v1::destroy>::activeChanged,
             this, &KWaylandIntegration::startSessionManagement);
