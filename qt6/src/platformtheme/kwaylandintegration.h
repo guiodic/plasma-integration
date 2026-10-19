@@ -16,6 +16,7 @@ class QWindow;
 class ServerSideDecorationPaletteManager;
 class XdgSessionManagerV1;
 class XdgSessionV1;
+class XdgToplevelSessionV1;
 
 class KWaylandIntegration : public QObject
 {
