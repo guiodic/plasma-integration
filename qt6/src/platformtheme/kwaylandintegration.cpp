@@ -124,7 +124,7 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
 
 KWaylandIntegration::~KWaylandIntegration()
 {
-    for (auto *session : std::as_const(m_toplevelSessions)) {
+    for (auto *session : m_toplevelSessions) {
         delete session;
     }
     m_toplevelSessions.clear();
