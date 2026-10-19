@@ -154,6 +154,13 @@ bool KWaylandIntegration::eventFilter(QObject *watched, QEvent *event)
         QPlatformSurfaceEvent *pe = static_cast<QPlatformSurfaceEvent *>(event);
         if (w && !w->flags().testFlag(Qt::ForeignWindow) && pe->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
             if (auto waylandWindow = w->nativeInterface<QNativeInterface::Private::QWaylandWindow>()) {
+                // QtWayland 6.12 may call restore_toplevel() while creating the
+                // xdg_toplevel if this ID is non-empty. Session restoration is
+                // handled below by plasma-integration instead, so clear it
+                // before the shell role is created to avoid associating one
+                // toplevel with two sessions.
+                waylandWindow->setSessionRestoreId(QString());
+
                 connect(waylandWindow, &QNativeInterface::Private::QWaylandWindow::surfaceCreated, this, [this, w] {
                     shellSurfaceCreated(w);
                 });
@@ -308,16 +315,21 @@ void KWaylandIntegration::registerToplevelSession(QWindow *w)
     w->setProperty(s_toplevelSessionAttachedProperty, true);
     m_toplevelSessionNames.insert(w, name);
 
-    qWarning() << "xdg-session: restore_toplevel DISABLED FOR TEST"
-               << "window=" << static_cast<void *>(w)
-               << "surface=" << static_cast<void *>(waylandWindow->surface())
-               << "toplevel=" << static_cast<void *>(toplevel)
-               << "session=" << static_cast<void *>(m_session.data())
-               << "name=" << name;
+    auto *toplevelSession = new XdgToplevelSessionV1;
+    toplevelSession->init(m_session->restore_toplevel(toplevel, name));
+    m_toplevelSessions.insert(w, toplevelSession);
 
-    // Diagnostic test: skip our restore_toplevel() request to check whether
-    // Qt's own session-management support is already associating this toplevel.
-    // Re-enable the request after confirming the source of the protocol error.
+    connect(w, &QObject::destroyed, this, [this, w] {
+        delete m_toplevelSessions.take(w);
+        m_toplevelSessionNames.remove(w);
+    });
+
+    qDebug() << "xdg-session: restore_toplevel"
+             << "window=" << static_cast<void *>(w)
+             << "surface=" << static_cast<void *>(waylandWindow->surface())
+             << "toplevel=" << static_cast<void *>(toplevel)
+             << "session=" << static_cast<void *>(m_session.data())
+             << "name=" << name;
 }
 
 void KWaylandIntegration::installColorScheme(QWindow *w)
