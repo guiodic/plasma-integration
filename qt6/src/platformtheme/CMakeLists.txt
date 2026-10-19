@@ -61,7 +61,6 @@ target_link_libraries(KDEPlasmaPlatformTheme6
         KF6::WindowSystem
         KF6::GuiAddons
         Qt6::WaylandClient
-        Qt6::WaylandClientPrivate
         Wayland::Client
 )
 
