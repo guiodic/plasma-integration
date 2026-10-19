@@ -37,6 +37,7 @@ private:
 
     void installColorScheme(QWindow *w);
     void initializeSessionManagement();
+    void startSessionManagement();
     void registerToplevelSession(QWindow *w);
     QString toplevelSessionName(QWindow *w) const;
     QScopedPointer<ServerSideDecorationPaletteManager> m_paletteManager;
