@@ -36,6 +36,8 @@ qt6_generate_wayland_protocol_client_sources(KDEPlasmaPlatformTheme6
     PRIVATE_CODE
     FILES
         ${PLASMA_WAYLAND_PROTOCOLS_DIR}/server-decoration-palette.xml
+        ${WaylandProtocols_DATADIR}/staging/xdg-session-management/xdg-session-management-v1.xml
+        ${WaylandProtocols_DATADIR}/stable/xdg-shell/xdg-shell.xml
 )
 
 target_sources(KDEPlasmaPlatformTheme6 PRIVATE ${platformtheme_SRCS})
