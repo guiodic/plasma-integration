@@ -135,9 +135,16 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     , m_platformTheme(platformTheme)
 {
     QCoreApplication::instance()->installEventFilter(this);
+    initializeSessionManagement();
 }
 
-KWaylandIntegration::~KWaylandIntegration() = default;
+KWaylandIntegration::~KWaylandIntegration()
+{
+    for (auto *session : m_toplevelSessions) {
+        delete session;
+    }
+    m_toplevelSessions.clear();
+}
 
 bool KWaylandIntegration::isRelevantTopLevel(QWindow *w)
 {
@@ -191,6 +198,7 @@ bool KWaylandIntegration::eventFilter(QObject *watched, QEvent *event)
         QPlatformSurfaceEvent *pe = static_cast<QPlatformSurfaceEvent *>(event);
         if (w && !w->flags().testFlag(Qt::ForeignWindow) && pe->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
             m_platformTheme->windowCreated(w);
+            registerToplevelSession(w);
         }
     }
 
@@ -213,6 +221,7 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
         return;
     }
 
+    registerToplevelSession(w);
     w->setProperty("org.kde.plasma.integration.shellSurfaceCreated", true);
 
 #ifndef KF6_TODO_DBUS_MENUBAR
@@ -235,6 +244,10 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
 
 void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
 {
+    delete m_toplevelSessions.take(w);
+    m_toplevelSessionNames.remove(w);
+    w->setProperty(s_toplevelSessionAttachedProperty, false);
+
     w->setProperty("org.kde.plasma.integration.shellSurfaceCreated", QVariant());
 
     auto appMenu = w->property("org.kde.plasma.integration.appmenu").value<AppMenu *>();
