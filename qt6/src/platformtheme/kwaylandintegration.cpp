@@ -11,6 +11,7 @@
 #include <QGuiApplication>
 #include <QWindow>
 #include <QVariant>
+#include <QDebug>
 #include <KConfigGroup>
 #include <KSharedConfig>
 #include <qpa/qplatformwindow_p.h>
@@ -306,6 +307,14 @@ void KWaylandIntegration::registerToplevelSession(QWindow *w)
     // a second association as a fatal protocol error.
     w->setProperty(s_toplevelSessionAttachedProperty, true);
     m_toplevelSessionNames.insert(w, name);
+
+    qWarning() << "xdg-session: restore_toplevel"
+               << "window=" << static_cast<void *>(w)
+               << "surface=" << static_cast<void *>(waylandWindow->surface())
+               << "toplevel=" << static_cast<void *>(toplevel)
+               << "session=" << static_cast<void *>(m_session.data())
+               << "name=" << name;
+
     auto *session = new XdgToplevelSessionV1;
     session->init(m_session->restore_toplevel(toplevel, name));
     // Keep the protocol object alive for as long as the QWindow exists.
