@@ -165,7 +165,15 @@ bool KWaylandIntegration::eventFilter(QObject *watched, QEvent *event)
                 // handled below by plasma-integration instead, so clear it
                 // before the shell role is created to avoid associating one
                 // toplevel with two sessions.
+                qDebug() << "xdg-session: Qt restore ID before clearing"
+                         << "window=" << w
+                         << "id=" << waylandWindow->sessionRestoreId();
+
                 waylandWindow->setSessionRestoreId(QString());
+
+                qDebug() << "xdg-session: Qt restore ID after clearing"
+                         << "window=" << w
+                         << "id=" << waylandWindow->sessionRestoreId();
 
                 connect(waylandWindow, &QNativeInterface::Private::QWaylandWindow::surfaceCreated, this, [this, w] {
                     shellSurfaceCreated(w);
