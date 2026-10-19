@@ -118,6 +118,12 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     : QObject()
     , m_platformTheme(platformTheme)
 {
+    // KMainWindow can set a window role after the platform surface is created.
+    // On QtWayland 6.12 this becomes a session restore ID and Qt automatically
+    // associates the xdg_toplevel with a session, conflicting with the
+    // association managed by plasma-integration below.
+    QCoreApplication::setAttribute(Qt::AA_DisableSessionManager);
+
     QCoreApplication::instance()->installEventFilter(this);
     initializeSessionManagement();
 }
