@@ -122,7 +122,11 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     initializeSessionManagement();
 }
 
-KWaylandIntegration::~KWaylandIntegration() = default;
+KWaylandIntegration::~KWaylandIntegration()
+{
+    qDeleteAll(m_toplevelSessions);
+    m_toplevelSessions.clear();
+}
 
 bool KWaylandIntegration::isRelevantTopLevel(QWindow *w)
 {
@@ -201,6 +205,10 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
 
 void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
 {
+    delete m_toplevelSessions.take(w);
+    m_toplevelSessionNames.remove(w);
+    w->setProperty(s_toplevelSessionAttachedProperty, false);
+
     auto decoPallete = w->property("org.kde.plasma.integration.palette").value<ServerSideDecorationPalette *>();
     if (decoPallete) {
         delete decoPallete;
