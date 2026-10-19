@@ -25,6 +25,7 @@ static const QByteArray s_schemePropertyName = QByteArrayLiteral("KDE_COLOR_SCHE
 static const QByteArray s_blurBehindPropertyName = QByteArrayLiteral("ENABLE_BLUR_BEHIND_HINT");
 static const QString s_sessionConfigGroup = QStringLiteral("XdgSessionManagement");
 static const char s_windowRestoreIdProperty[] = "KDE_SESSION_RESTORE_ID";
+static const char s_toplevelSessionAttachedProperty[] = "org.kde.plasma.integration.xdgSessionAttached";
 
 class XdgSessionManagerV1 : public QWaylandClientExtensionTemplate<XdgSessionManagerV1, &QtWayland::xdg_session_manager_v1::destroy>,
                             public QtWayland::xdg_session_manager_v1
@@ -289,10 +290,21 @@ void KWaylandIntegration::registerToplevelSession(QWindow *w)
         return;
     }
 
-    const QString name = toplevelSessionName(w);
-    if (name.isEmpty() || m_toplevelSessionNames.contains(w)) {
+    // A QWindow may emit surfaceRoleCreated more than once over its lifetime,
+    // and multiple platform-theme integrations must not associate the same
+    // xdg_toplevel with more than one session object.
+    if (w->property(s_toplevelSessionAttachedProperty).toBool() || m_toplevelSessionNames.contains(w)) {
         return;
     }
+
+    const QString name = toplevelSessionName(w);
+    if (name.isEmpty()) {
+        return;
+    }
+
+    // Set the guard before sending the protocol request: the compositor treats
+    // a second association as a fatal protocol error.
+    w->setProperty(s_toplevelSessionAttachedProperty, true);
     m_toplevelSessionNames.insert(w, name);
     auto *session = new XdgToplevelSessionV1;
     session->init(m_session->restore_toplevel(toplevel, name));
