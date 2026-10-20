@@ -5,7 +5,6 @@
 */
 #include "kwaylandintegration.h"
 
-#include <QExposeEvent>
 #include <QCryptographicHash>
 #include <QCoreApplication>
 #include <QGuiApplication>
@@ -14,7 +13,6 @@
 #include <QDebug>
 #include <KConfigGroup>
 #include <KSharedConfig>
-#include <qpa/qplatformwindow_p.h>
 
 #include "qwayland-server-decoration-palette.h"
 #include "qwayland-xdg-session-management-v1.h"
@@ -207,11 +205,6 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
     const auto blurBehindProperty = w->property(s_blurBehindPropertyName.constData());
     if (blurBehindProperty.isValid()) {
         KWindowEffects::enableBlurBehind(w, blurBehindProperty.toBool());
-    }
-    // create deco
-    wl_surface *s = surfaceFromWindow(w);
-    if (!s) {
-        return;
     }
 }
 
