@@ -8,6 +8,7 @@
 #include <QCryptographicHash>
 #include <QCoreApplication>
 #include <QGuiApplication>
+#include <QPlatformSurfaceEvent>
 #include <QWindow>
 #include <QVariant>
 #include <QDebug>
