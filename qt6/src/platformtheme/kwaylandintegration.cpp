@@ -251,10 +251,10 @@ void KWaylandIntegration::startSessionManagement()
         return;
     }
 
-    const QString appId = QGuiApplication::desktopFileName().isEmpty()
+    m_sessionAppId = QGuiApplication::desktopFileName().isEmpty()
         ? QCoreApplication::applicationName()
         : QGuiApplication::desktopFileName();
-    if (appId.isEmpty()) {
+    if (m_sessionAppId.isEmpty()) {
         return;
     }
 
@@ -266,10 +266,10 @@ void KWaylandIntegration::startSessionManagement()
              << "config=" << config->name();
 
     KConfigGroup group(config, s_sessionConfigGroup);
-    m_sessionId = group.readEntry(appId, QString());
+    m_sessionId = group.readEntry(m_sessionAppId, QString());
 
     qDebug() << "xdg-session: start"
-             << "appId=" << appId
+             << "appId=" << m_sessionAppId
              << "config=" << config->name()
              << "storedSessionId=" << m_sessionId;
 
@@ -296,10 +296,9 @@ void KWaylandIntegration::saveSessionId(const QString &id)
         return;
     }
 
-    const QString appId = QGuiApplication::desktopFileName().isEmpty()
-        ? QCoreApplication::applicationName()
-        : QGuiApplication::desktopFileName();
-    if (appId.isEmpty()) {
+    // Keep the same key that was used when starting the session. In some
+    // applications desktopFileName() is populated only after startup.
+    if (m_sessionAppId.isEmpty()) {
         return;
     }
 
@@ -314,16 +313,16 @@ void KWaylandIntegration::saveSessionId(const QString &id)
     KConfigGroup group(config, s_sessionConfigGroup);
 
     qDebug() << "xdg-session: save"
-             << "appId=" << appId
+             << "appId=" << m_sessionAppId
              << "config=" << config->name()
              << "sessionId=" << id;
 
-    group.writeEntry(appId, id);
+    group.writeEntry(m_sessionAppId, id);
     group.sync();
 
     qDebug() << "xdg-session: save complete"
-             << "appId=" << appId
-             << "storedSessionId=" << group.readEntry(appId, QString());
+             << "appId=" << m_sessionAppId
+             << "storedSessionId=" << group.readEntry(m_sessionAppId, QString());
 }
 
 QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
