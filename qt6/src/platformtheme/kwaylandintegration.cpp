@@ -12,6 +12,7 @@
 #include <QWindow>
 #include <QVariant>
 #include <QDebug>
+#include <QtWaylandClient/private/qwaylandwindow_p.h>
 #include <KConfigGroup>
 #include <KSharedConfig>
 
