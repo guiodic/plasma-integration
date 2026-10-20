@@ -35,16 +35,6 @@ ecm_add_qtwayland_client_protocol(platformtheme_SRCS
     PROTOCOL ${PLASMA_WAYLAND_PROTOCOLS_DIR}/server-decoration-palette.xml
     BASENAME server-decoration-palette
 )
-
-ecm_add_qtwayland_client_protocol(platformtheme_SRCS
-    PROTOCOL ${WaylandProtocols_DATADIR}/staging/xdg-session-management/xdg-session-management-v1.xml
-    BASENAME xdg-session-management-v1
-)
-
-ecm_add_qtwayland_client_protocol(platformtheme_SRCS
-    PROTOCOL ${WaylandProtocols_DATADIR}/stable/xdg-shell/xdg-shell.xml
-    BASENAME xdg-shell
-)
 target_sources(KDEPlasmaPlatformTheme5 PRIVATE ${platformtheme_SRCS})
 
 target_link_libraries(KDEPlasmaPlatformTheme5
