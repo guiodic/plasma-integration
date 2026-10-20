@@ -35,7 +35,6 @@ include(ECMDeprecationSettings)
 
 find_package(Wayland 1.9 REQUIRED Client)
 find_package(WaylandProtocols 1.49 REQUIRED)
-find_package(PlasmaWaylandProtocols 1.6.0 CONFIG REQUIRED)
 
 option(BUILD_QT5 "Build for Qt5" ON)
 option(BUILD_QT6 "Build for Qt6" ON)
@@ -106,6 +105,8 @@ endif()
 
 if (${BUILD_QT6})
     unset(QUERY_EXECUTABLE CACHE)
+
+    find_package(PlasmaWaylandProtocols 1.6.0 CONFIG REQUIRED)
 
     add_definitions(-DTRANSLATION_DOMAIN=\"plasmaintegration5\")
     add_subdirectory(qt6)
