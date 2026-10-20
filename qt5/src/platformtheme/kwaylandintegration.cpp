@@ -6,12 +6,6 @@
 #include "kwaylandintegration.h"
 
 #include <QExposeEvent>
-#include <QCryptographicHash>
-#include <QCoreApplication>
-#include <QVariant>
-#include <QDebug>
-#include <KConfigGroup>
-#include <KSharedConfig>
 #include <QGuiApplication>
 #include <QWindow>
 #include <qpa/qplatformnativeinterface.h>
@@ -20,16 +14,11 @@
 #include "qdbusmenubar_p.h"
 #include "qwayland-appmenu.h"
 #include "qwayland-server-decoration-palette.h"
-#include "qwayland-xdg-session-management-v1.h"
-#include "qwayland-xdg-shell.h"
 
 #include <KWindowEffects>
 
 static const QByteArray s_schemePropertyName = QByteArrayLiteral("KDE_COLOR_SCHEME_PATH");
 static const QByteArray s_blurBehindPropertyName = QByteArrayLiteral("ENABLE_BLUR_BEHIND_HINT");
-static const QString s_sessionConfigGroup = QStringLiteral("XdgSessionManagement");
-static const char s_windowRestoreIdProperty[] = "KDE_SESSION_RESTORE_ID";
-static const char s_toplevelSessionAttachedProperty[] = "org.kde.plasma.integration.xdgSessionAttached";
 
 class AppMenuManager : public QWaylandClientExtensionTemplate<AppMenuManager>, public QtWayland::org_kde_kwin_appmenu_manager
 {
@@ -57,47 +46,6 @@ public:
     {
         release();
     }
-};
-
-
-class XdgSessionManagerV1 : public QWaylandClientExtensionTemplate<XdgSessionManagerV1>,
-                            public QtWayland::xdg_session_manager_v1
-{
-public:
-    XdgSessionManagerV1()
-        : QWaylandClientExtensionTemplate<XdgSessionManagerV1>(1)
-    {
-        QMetaObject::invokeMethod(this, "addRegistryListener");
-    }
-    ~XdgSessionManagerV1() override
-    {
-        if (isActive()) {
-            destroy();
-        }
-    }
-};
-
-class XdgSessionV1 : public QtWayland::xdg_session_v1
-{
-public:
-    void setIntegration(KWaylandIntegration *integration) { m_integration = integration; }
-    ~XdgSessionV1() override { destroy(); }
-protected:
-    void xdg_session_v1_created(const QString &id) override
-    {
-        if (m_integration) m_integration->saveSessionId(id);
-    }
-    void xdg_session_v1_restored() override {}
-    void xdg_session_v1_replaced() override { destroy(); }
-private:
-    KWaylandIntegration *m_integration = nullptr;
-};
-
-class XdgToplevelSessionV1 : public QtWayland::xdg_toplevel_session_v1
-{
-public:
-    using QtWayland::xdg_toplevel_session_v1::xdg_toplevel_session_v1;
-    ~XdgToplevelSessionV1() override { destroy(); }
 };
 
 class ServerSideDecorationPaletteManager : public QWaylandClientExtensionTemplate<ServerSideDecorationPaletteManager>,
@@ -136,16 +84,9 @@ KWaylandIntegration::KWaylandIntegration(KdePlatformTheme *platformTheme)
     , m_platformTheme(platformTheme)
 {
     QCoreApplication::instance()->installEventFilter(this);
-    initializeSessionManagement();
 }
 
-KWaylandIntegration::~KWaylandIntegration()
-{
-    for (auto *session : m_toplevelSessions) {
-        delete session;
-    }
-    m_toplevelSessions.clear();
-}
+KWaylandIntegration::~KWaylandIntegration() = default;
 
 bool KWaylandIntegration::isRelevantTopLevel(QWindow *w)
 {
@@ -199,7 +140,6 @@ bool KWaylandIntegration::eventFilter(QObject *watched, QEvent *event)
         QPlatformSurfaceEvent *pe = static_cast<QPlatformSurfaceEvent *>(event);
         if (w && !w->flags().testFlag(Qt::ForeignWindow) && pe->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
             m_platformTheme->windowCreated(w);
-            registerToplevelSession(w);
         }
     }
 
@@ -222,7 +162,6 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
         return;
     }
 
-    registerToplevelSession(w);
     w->setProperty("org.kde.plasma.integration.shellSurfaceCreated", true);
 
 #ifndef KF6_TODO_DBUS_MENUBAR
@@ -245,10 +184,6 @@ void KWaylandIntegration::shellSurfaceCreated(QWindow *w)
 
 void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
 {
-    delete m_toplevelSessions.take(w);
-    m_toplevelSessionNames.remove(w);
-    w->setProperty(s_toplevelSessionAttachedProperty, false);
-
     w->setProperty("org.kde.plasma.integration.shellSurfaceCreated", QVariant());
 
     auto appMenu = w->property("org.kde.plasma.integration.appmenu").value<AppMenu *>();
@@ -262,143 +197,6 @@ void KWaylandIntegration::shellSurfaceDestroyed(QWindow *w)
         delete decoPallete;
     }
     w->setProperty("org.kde.plasma.integration.palette", QVariant());
-}
-
-
-void KWaylandIntegration::initializeSessionManagement()
-{
-    m_sessionManager.reset(new XdgSessionManagerV1);
-    connect(m_sessionManager.data(), &QWaylandClientExtensionTemplate<XdgSessionManagerV1>::activeChanged,
-            this, &KWaylandIntegration::startSessionManagement);
-    if (m_sessionManager->isActive()) {
-        startSessionManagement();
-    }
-}
-
-void KWaylandIntegration::startSessionManagement()
-{
-    if (!m_sessionManager || !m_sessionManager->isActive() || m_session) {
-        return;
-    }
-
-    const QString appId = QGuiApplication::desktopFileName().isEmpty()
-        ? QCoreApplication::applicationName()
-        : QGuiApplication::desktopFileName();
-    if (appId.isEmpty()) {
-        return;
-    }
-
-    const auto config = KSharedConfig::openConfig();
-    KConfigGroup group(config, s_sessionConfigGroup);
-    m_sessionId = group.readEntry(appId, QString());
-    qDebug() << "xdg-session: start" << "appId=" << appId << "storedSessionId=" << m_sessionId;
-
-    m_session.reset(new XdgSessionV1);
-    m_session->setIntegration(this);
-    if (m_sessionId.isEmpty()) {
-        m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_launch, QString()));
-    } else {
-        m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_session_restore, m_sessionId));
-    }
-}
-
-void KWaylandIntegration::saveSessionId(const QString &id)
-{
-    if (id.isEmpty()) {
-        return;
-    }
-
-    const QString appId = QGuiApplication::desktopFileName().isEmpty()
-        ? QCoreApplication::applicationName()
-        : QGuiApplication::desktopFileName();
-    if (appId.isEmpty()) {
-        return;
-    }
-
-    m_sessionId = id;
-    const auto config = KSharedConfig::openConfig();
-    KConfigGroup group(config, s_sessionConfigGroup);
-    group.writeEntry(appId, id);
-    group.sync();
-    qDebug() << "xdg-session: saved session ID" << appId << id;
-}
-
-QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
-{
-    const QVariant explicitId = w->property(s_windowRestoreIdProperty);
-    QString name;
-    if (explicitId.isValid() && !explicitId.toString().isEmpty()) {
-        name = explicitId.toString();
-    } else {
-        QString identity = w->objectName();
-        if (identity.isEmpty()) {
-            identity = w->title();
-        }
-        if (identity.isEmpty()) {
-            identity = QStringLiteral("%1:%2").arg(w->metaObject()->className()).arg(int(w->type()));
-        }
-
-        const QString appId = QGuiApplication::desktopFileName().isEmpty()
-            ? QCoreApplication::applicationName()
-            : QGuiApplication::desktopFileName();
-        name = QString::fromLatin1(QCryptographicHash::hash((appId + QLatin1Char('/') + identity).toUtf8(),
-                                                             QCryptographicHash::Sha256).toHex());
-    }
-
-    const QString baseName = name;
-    int suffix = 2;
-    auto nameInUse = [this, w](const QString &candidate) {
-        for (auto it = m_toplevelSessionNames.cbegin(); it != m_toplevelSessionNames.cend(); ++it) {
-            if (it.key() != w && it.value() == candidate) {
-                return true;
-            }
-        }
-        return false;
-    };
-    while (nameInUse(name)) {
-        name = baseName + QLatin1Char('-') + QString::number(suffix++);
-    }
-    if (name != baseName) {
-        qWarning() << "xdg-session: duplicate toplevel identity; using unique ID" << baseName << name;
-    }
-    return name;
-}
-
-void KWaylandIntegration::registerToplevelSession(QWindow *w)
-{
-    if (!m_sessionManager || !m_sessionManager->isActive() || !m_session || !isRelevantTopLevel(w)) {
-        return;
-    }
-
-    QPlatformNativeInterface *native = qGuiApp->platformNativeInterface();
-    if (!native) {
-        return;
-    }
-    auto *toplevel = static_cast<xdg_toplevel *>(native->nativeResourceForWindow("xdg_toplevel", w));
-    if (!toplevel) {
-        return;
-    }
-    if (w->property(s_toplevelSessionAttachedProperty).toBool() || m_toplevelSessionNames.contains(w)) {
-        return;
-    }
-
-    const QString name = toplevelSessionName(w);
-    if (name.isEmpty()) {
-        return;
-    }
-
-    w->setProperty(s_toplevelSessionAttachedProperty, true);
-    m_toplevelSessionNames.insert(w, name);
-
-    auto *session = new XdgToplevelSessionV1;
-    session->init(m_session->restore_toplevel(toplevel, name));
-    m_toplevelSessions.insert(w, session);
-    connect(w, &QObject::destroyed, this, [this, w] {
-        delete m_toplevelSessions.take(w);
-        m_toplevelSessionNames.remove(w);
-    });
-
-    qDebug() << "xdg-session: restore_toplevel" << w << name;
 }
 
 void KWaylandIntegration::installColorScheme(QWindow *w)
