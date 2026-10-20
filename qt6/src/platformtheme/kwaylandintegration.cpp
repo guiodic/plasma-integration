@@ -264,6 +264,12 @@ void KWaylandIntegration::startSessionManagement()
     }
 
     const auto config = KSharedConfig::openConfig();
+    qDebug() << "xdg-session: identity"
+             << "desktopFileName=" << QGuiApplication::desktopFileName()
+             << "applicationName=" << QCoreApplication::applicationName()
+             << "organizationName=" << QCoreApplication::organizationName()
+             << "config=" << config->name();
+
     KConfigGroup group(config, s_sessionConfigGroup);
     m_sessionId = group.readEntry(appId, QString());
 
@@ -296,6 +302,12 @@ void KWaylandIntegration::saveSessionId(const QString &id)
 
     m_sessionId = id;
     const auto config = KSharedConfig::openConfig();
+    qDebug() << "xdg-session: identity"
+             << "desktopFileName=" << QGuiApplication::desktopFileName()
+             << "applicationName=" << QCoreApplication::applicationName()
+             << "organizationName=" << QCoreApplication::organizationName()
+             << "config=" << config->name();
+
     KConfigGroup group(config, s_sessionConfigGroup);
 
     qDebug() << "xdg-session: save"
