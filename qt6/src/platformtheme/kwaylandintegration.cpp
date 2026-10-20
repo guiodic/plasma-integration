@@ -278,6 +278,14 @@ void KWaylandIntegration::startSessionManagement()
     } else {
         m_session->init(m_sessionManager->get_session(XdgSessionManagerV1::reason_session_restore, m_sessionId));
     }
+
+    // A window can create its xdg_toplevel before the session-manager global
+    // becomes active. Its surfaceRoleCreated signal would then be missed by
+    // registerToplevelSession(), so also inspect windows that already exist.
+    const auto topLevelWindows = QGuiApplication::topLevelWindows();
+    for (QWindow *w : topLevelWindows) {
+        registerToplevelSession(w);
+    }
 }
 
 void KWaylandIntegration::saveSessionId(const QString &id)
