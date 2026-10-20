@@ -47,6 +47,7 @@ target_sources(KDEPlasmaPlatformTheme6 PRIVATE ${platformtheme_SRCS})
 # The public Qt6::WaylandClient target does not add this versioned path.
 target_include_directories(KDEPlasmaPlatformTheme6 PRIVATE
     "${Qt6Core_INCLUDE_DIRS}/QtWaylandClient/${Qt6Core_VERSION}"
+    "${Qt6Core_INCLUDE_DIRS}/QtWaylandGlobal/${Qt6Core_VERSION}"
 )
 
 target_link_libraries(KDEPlasmaPlatformTheme6
