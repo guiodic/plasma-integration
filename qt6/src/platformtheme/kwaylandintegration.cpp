@@ -344,9 +344,9 @@ QString KWaylandIntegration::toplevelSessionName(QWindow *w) const
             identity = QStringLiteral("%1:%2").arg(w->metaObject()->className()).arg(int(w->type()));
         }
 
-        const QString appId = QGuiApplication::desktopFileName().isEmpty()
-            ? QCoreApplication::applicationName()
-            : QGuiApplication::desktopFileName();
+        // Use the same application identity that was fixed when the session started.
+        // desktopFileName() can be populated later and must not change the window IDs.
+        const QString appId = m_sessionAppId;
         const QByteArray material = (appId + QLatin1Char('/') + identity).toUtf8();
         name = QString::fromLatin1(QCryptographicHash::hash(material, QCryptographicHash::Sha256).toHex());
     }
