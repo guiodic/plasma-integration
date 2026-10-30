@@ -36,6 +36,7 @@ public:
         : QObject(parent)
     {
         qApp->installEventFilter(this);
+        // Save only on shutdown so startup cannot overwrite a just-closed session.
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
             saveSessionId();
         });
@@ -67,7 +68,6 @@ private:
         if (!application->session_manager) {
             return;
         }
-        // Explicit desktop-session restores and application opt-outs belong to Qt.
         if (qApp->testAttribute(Qt::AA_DisableSessionManager) || qApp->isSessionRestored()) {
             return;
         }
@@ -139,14 +139,11 @@ private:
         if (!savedId.isEmpty() && savedId != qApp->sessionId()) {
             auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
             auto *previous = manager->platformSessionManager;
-            // Qt 6.12 has no public setter for the initial session ID. Recreate only
-            // its native backend through QPA, before the first xdg_toplevel is
-            // made. Qt still owns every protocol object and window association.
+            // Qt 6.12 has no public session-ID setter. Replace the native backend
+            // before the first xdg_toplevel is associated with it.
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
             delete previous;
         }
-        // Save only on shutdown: an initialization write could overwrite the
-        // ID of another process that has just closed while we were restoring.
     }
 
     void saveSessionId()
@@ -158,12 +155,7 @@ private:
         if (id.isEmpty()) {
             return;
         }
-        // QSessionManager::sessionId() delegates to platformSessionManager, so
-        // this is the current native ID even after replacing that backend.
-        // Read the current on-disk value independently of the application's
-        // shared KConfig cache: another process may have saved since startup.
-        // KConfig handles write locking during sync(); the lifetime lock above
-        // only gates restoration and is not required for saving.
+        // Read fresh state because another process may have saved since startup.
         KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
         // Keep the parent mutable so its subgroup supports writing and sync().
         KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
