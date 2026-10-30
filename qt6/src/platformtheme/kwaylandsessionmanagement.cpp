@@ -15,6 +15,7 @@
 #include <QPlatformSurfaceEvent>
 #include <QSessionManager>
 #include <QStandardPaths>
+#include <QSysInfo>
 #include <QWindow>
 #include <private/qguiapplication_p.h>
 #include <private/qsessionmanager_p.h>
@@ -59,32 +60,53 @@ protected:
 private:
     void initialize()
     {
+        // Never replace a backend after an earlier eligible window may have
+        // acquired its xdg_toplevel, even if initialization cannot finish now.
+        m_initialized = true;
         auto *application = QGuiApplicationPrivate::instance();
         if (!application->session_manager) {
             return;
         }
         // Explicit desktop-session restores and application opt-outs belong to Qt.
         if (qApp->testAttribute(Qt::AA_DisableSessionManager) || qApp->isSessionRestored()) {
-            m_initialized = true;
             return;
         }
-        // Qt 6.12 obtains the ID synchronously. Keep initialization retryable
-        // if no native session is available at this surface event.
-        if (qApp->sessionId().isEmpty()) {
-            return;
-        }
-
         const QString appId = QGuiApplication::desktopFileName().isEmpty() ? QCoreApplication::applicationName() : QGuiApplication::desktopFileName();
         if (appId.isEmpty()) {
             return;
         }
 
-        m_config = KSharedConfig::openConfig();
-        m_appId = appId;
+        // A passed connection FD does not identify a stable compositor socket.
+        // Do not mix its state with an unrelated WAYLAND_DISPLAY/default socket.
+        if (qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
+            return;
+        }
         const QString runtimePath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
         if (runtimePath.isEmpty()) {
             return;
         }
+        QString displayPath = qEnvironmentVariable("WAYLAND_DISPLAY");
+        if (displayPath.isEmpty()) {
+            displayPath = QStringLiteral("wayland-0");
+        }
+        if (QDir::isRelativePath(displayPath)) {
+            displayPath = QDir(runtimePath).absoluteFilePath(displayPath);
+        }
+        const QString canonicalDisplay = QFileInfo(displayPath).canonicalFilePath();
+        if (!canonicalDisplay.isEmpty()) {
+            displayPath = canonicalDisplay;
+        }
+        // These identifiers usually survive login/compositor restarts, unlike
+        // XDG_SESSION_ID. Socket renaming intentionally selects a new scope.
+        QByteArray machine = QSysInfo::machineUniqueId();
+        if (machine.isEmpty()) {
+            machine = QSysInfo::machineHostName().toUtf8();
+        }
+        const QByteArray environment = machine + '\0' + qgetenv("XDG_CURRENT_DESKTOP") + '\0' + QDir::cleanPath(displayPath).toUtf8();
+        m_environment = QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
+
+        m_config = KSharedConfig::openStateConfig();
+        m_appId = appId;
         QString configPath = m_config->name();
         if (QDir::isRelativePath(configPath)) {
             configPath = QDir(QStandardPaths::writableLocation(m_config->locationType())).absoluteFilePath(configPath);
@@ -96,19 +118,23 @@ private:
             const QString directory = configFile.dir().canonicalPath();
             canonicalPath = directory.isEmpty() ? configFile.absoluteFilePath() : QDir(directory).filePath(configFile.fileName());
         }
-        const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId).toUtf8();
+        const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId + QLatin1Char('/') + m_environment).toUtf8();
         const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
         m_restoreLock = std::make_unique<QLockFile>(runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock"));
         // Held for the process lifetime; disable age-based stale detection.
         m_restoreLock->setStaleLockTime(0);
-        m_initialized = true;
         // Only one live process may restore the persisted session. Other
         // processes retain their independent Qt sessions and save on exit.
-        if (!m_restoreLock->tryLock(0)) {
+        // Persistence may still save a later non-empty ID on orderly shutdown.
+        if (qApp->sessionId().isEmpty() || !m_restoreLock->tryLock(0)) {
             return;
         }
 
-        const QString savedId = KConfigGroup(m_config, QStringLiteral("XdgSessionManagement")).readEntry(appId, QString());
+        // The shared config may have been cached before another process saved.
+        // Read independently without reparsing the application's shared object.
+        KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
+        const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
+        const QString savedId = sessions.group(m_environment).readEntry(appId, QString());
         if (!savedId.isEmpty() && savedId != qApp->sessionId()) {
             auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
             auto *previous = manager->platformSessionManager;
@@ -118,7 +144,8 @@ private:
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
             delete previous;
         }
-        saveSessionId();
+        // Save only on shutdown: an initialization write could overwrite the
+        // ID of another process that has just closed while we were restoring.
     }
 
     void saveSessionId()
@@ -137,7 +164,8 @@ private:
         // KConfig's short-lived write lock serializes configuration updates;
         // the lifetime lock above protects restoration only.
         KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
-        KConfigGroup group(&config, QStringLiteral("XdgSessionManagement"));
+        const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
+        KConfigGroup group = sessions.group(m_environment);
         if (group.readEntry(m_appId, QString()) == id) {
             return;
         }
@@ -150,6 +178,7 @@ private:
     bool m_initialized = false;
     KSharedConfig::Ptr m_config;
     QString m_appId;
+    QString m_environment;
     std::unique_ptr<QLockFile> m_restoreLock;
 };
 }
