@@ -49,7 +49,7 @@ protected:
             auto *surfaceEvent = static_cast<QPlatformSurfaceEvent *>(event);
             if (window && !window->parent() && !window->flags().testFlag(Qt::ForeignWindow) && window->type() != Qt::Popup
                 && window->type() != Qt::ToolTip && surfaceEvent->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
-                // Qt Wayland creates the wl_surface in the platform window
+                // Qt 6.12 Wayland creates the wl_surface in the platform window
                 // constructor, but defers the xdg_toplevel until setVisible().
                 initialize();
             }
@@ -76,8 +76,8 @@ private:
             return;
         }
 
-        // A passed connection FD does not identify a stable compositor socket.
-        // Do not mix its state with an unrelated WAYLAND_DISPLAY/default socket.
+        // A passed connection FD can bypass WAYLAND_DISPLAY. Skip persistence
+        // rather than assign it to an unrelated/default socket path.
         if (qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
             return;
         }
@@ -96,8 +96,8 @@ private:
         if (!canonicalDisplay.isEmpty()) {
             displayPath = canonicalDisplay;
         }
-        // These identifiers usually survive login/compositor restarts, unlike
-        // XDG_SESSION_ID. Socket renaming intentionally selects a new scope.
+        // Reuse the scope while the machine, desktop and socket path stay the
+        // same. A socket-path change selects a new scope; avoid per-login IDs.
         QByteArray machine = QSysInfo::machineUniqueId();
         if (machine.isEmpty()) {
             machine = QSysInfo::machineHostName().toUtf8();
@@ -114,19 +114,20 @@ private:
         const QFileInfo configFile(configPath);
         QString canonicalPath = configFile.canonicalFilePath();
         if (canonicalPath.isEmpty()) {
-            // The config file need not exist on the application's first run.
+            // The state file need not exist on the application's first run.
             const QString directory = configFile.dir().canonicalPath();
             canonicalPath = directory.isEmpty() ? configFile.absoluteFilePath() : QDir(directory).filePath(configFile.fileName());
         }
         const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId + QLatin1Char('/') + m_environment).toUtf8();
         const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
         m_restoreLock = std::make_unique<QLockFile>(runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock"));
-        // Held for the process lifetime; disable age-based stale detection.
+        // Keep live restoration locks valid regardless of age. QLockFile still
+        // detects a terminated owner and can recover its stale lock file.
         m_restoreLock->setStaleLockTime(0);
         // Only one live process may restore the persisted session. Other
         // processes retain their independent Qt sessions and save on exit.
-        // Persistence may still save a later non-empty ID on orderly shutdown.
-        if (qApp->sessionId().isEmpty() || !m_restoreLock->tryLock(0)) {
+        // A saved ID can be restored even before Qt receives the new session's ID.
+        if (!m_restoreLock->tryLock(0)) {
             return;
         }
 
@@ -138,7 +139,7 @@ private:
         if (!savedId.isEmpty() && savedId != qApp->sessionId()) {
             auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
             auto *previous = manager->platformSessionManager;
-            // Qt has no public setter for the initial session ID. Recreate only
+            // Qt 6.12 has no public setter for the initial session ID. Recreate only
             // its native backend through QPA, before the first xdg_toplevel is
             // made. Qt still owns every protocol object and window association.
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
@@ -161,10 +162,11 @@ private:
         // this is the current native ID even after replacing that backend.
         // Read the current on-disk value independently of the application's
         // shared KConfig cache: another process may have saved since startup.
-        // KConfig's short-lived write lock serializes configuration updates;
-        // the lifetime lock above protects restoration only.
+        // KConfig handles write locking during sync(); the lifetime lock above
+        // only gates restoration and is not required for saving.
         KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
-        const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
+        // Keep the parent mutable so its subgroup supports writing and sync().
+        KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         KConfigGroup group = sessions.group(m_environment);
         if (group.readEntry(m_appId, QString()) == id) {
             return;
