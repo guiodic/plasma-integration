@@ -45,19 +45,27 @@ public:
 protected:
     bool eventFilter(QObject *object, QEvent *event) override
     {
-        if (event->type() == QEvent::PlatformSurface) {
-            auto *window = qobject_cast<QWindow *>(object);
-            auto *surfaceEvent = static_cast<QPlatformSurfaceEvent *>(event);
-            if (window && !window->parent() && !window->flags().testFlag(Qt::ForeignWindow) && window->type() != Qt::Popup
-                && window->type() != Qt::ToolTip && surfaceEvent->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
-                // Qt 6.12 Wayland creates the wl_surface in the platform window
-                // constructor, but defers the xdg_toplevel until setVisible().
-                // Never retry after an eligible window, even if initialization
-                // returns early: the window may acquire its xdg_toplevel next.
-                qApp->removeEventFilter(this);
-                initialize();
-            }
+        if (event->type() != QEvent::PlatformSurface) {
+            return false;
         }
+        const auto *surfaceEvent = static_cast<QPlatformSurfaceEvent *>(event);
+        if (surfaceEvent->surfaceEventType() != QPlatformSurfaceEvent::SurfaceCreated) {
+            return false;
+        }
+        const auto *window = qobject_cast<QWindow *>(object);
+        if (!window || window->parent()) {
+            return false;
+        }
+        if (window->flags().testFlag(Qt::ForeignWindow) || window->type() == Qt::Popup || window->type() == Qt::ToolTip) {
+            return false;
+        }
+
+        // Qt 6.12 Wayland creates the wl_surface in the platform window
+        // constructor, but defers the xdg_toplevel until setVisible().
+        // Never retry after an eligible window, even if initialization
+        // returns early: the window may acquire its xdg_toplevel next.
+        qApp->removeEventFilter(this);
+        initialize();
         return false;
     }
 
