@@ -109,6 +109,7 @@ protected:
             deleteLater();
             return false;
         }
+        m_sessionId = qApp->sessionId();
         // Save only on shutdown so startup cannot overwrite a just-closed session.
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
             saveSessionId();
@@ -177,7 +178,7 @@ private:
             return;
         }
         const QString id = qApp->sessionId();
-        if (id.isEmpty()) {
+        if (id.isEmpty() && m_sessionId.isEmpty()) {
             return;
         }
         // Read fresh state because another process may have saved since startup.
@@ -185,10 +186,23 @@ private:
         // Keep the parent mutable so its subgroup supports writing and sync().
         KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         KConfigGroup group = sessions.group(m_environment);
-        if (group.readEntry(m_appId, QString()) == id) {
-            return;
+        const QString savedId = group.readEntry(m_appId, QString());
+        if (id.isEmpty()) {
+            // Qt clears a previously assigned ID when the compositor replaces
+            // our session, e.g. after an explicit -session launch bypasses the
+            // restore lock. Do not let a later launch take that session back.
+            // Only invalidate our own ID; another process may have saved a
+            // different session since we started.
+            if (savedId != m_sessionId) {
+                return;
+            }
+            group.deleteEntry(m_appId);
+        } else {
+            if (savedId == id) {
+                return;
+            }
+            group.writeEntry(m_appId, id);
         }
-        group.writeEntry(m_appId, id);
         if (!group.sync()) {
             qWarning() << "Failed to persist native Wayland session ID in" << config.name();
         }
@@ -196,6 +210,7 @@ private:
 
     KSharedConfig::Ptr m_config;
     QString m_appId;
+    QString m_sessionId;
     QString m_environment;
     std::unique_ptr<QLockFile> m_restoreLock;
 };
