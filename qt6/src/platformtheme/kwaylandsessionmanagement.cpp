@@ -45,13 +45,16 @@ public:
 protected:
     bool eventFilter(QObject *object, QEvent *event) override
     {
-        if (!m_initialized && event->type() == QEvent::PlatformSurface) {
+        if (event->type() == QEvent::PlatformSurface) {
             auto *window = qobject_cast<QWindow *>(object);
             auto *surfaceEvent = static_cast<QPlatformSurfaceEvent *>(event);
             if (window && !window->parent() && !window->flags().testFlag(Qt::ForeignWindow) && window->type() != Qt::Popup
                 && window->type() != Qt::ToolTip && surfaceEvent->surfaceEventType() == QPlatformSurfaceEvent::SurfaceCreated) {
                 // Qt 6.12 Wayland creates the wl_surface in the platform window
                 // constructor, but defers the xdg_toplevel until setVisible().
+                // Never retry after an eligible window, even if initialization
+                // returns early: the window may acquire its xdg_toplevel next.
+                qApp->removeEventFilter(this);
                 initialize();
             }
         }
@@ -61,9 +64,6 @@ protected:
 private:
     void initialize()
     {
-        // Never replace a backend after an earlier eligible window may have
-        // acquired its xdg_toplevel, even if initialization cannot finish now.
-        m_initialized = true;
         auto *application = QGuiApplicationPrivate::instance();
         if (!application->session_manager) {
             return;
@@ -169,7 +169,6 @@ private:
         }
     }
 
-    bool m_initialized = false;
     KSharedConfig::Ptr m_config;
     QString m_appId;
     QString m_environment;
