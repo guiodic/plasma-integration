@@ -146,12 +146,10 @@ private:
         m_config = KSharedConfig::openStateConfig();
         m_appId = appId;
         m_restoreLock = std::make_unique<QLockFile>(sessionRestoreLockPath(m_config, appId, m_environment, runtimePath));
-        // Keep live restoration locks valid regardless of age. QLockFile still
-        // detects a terminated owner and can recover its stale lock file.
+        // Disable age-based expiry; QLockFile still recovers locks of dead owners.
         m_restoreLock->setStaleLockTime(0);
-        // Only one live process may restore the persisted session. Other
-        // processes retain their independent Qt sessions and save on exit.
-        // A saved ID can be restored even before Qt receives the new session's ID.
+        // Only one process restores the saved session; the others keep their
+        // independent Qt sessions and may still save them on exit.
         if (!m_restoreLock->tryLock(0)) {
             return true;
         }
@@ -181,9 +179,16 @@ private:
         if (id.isEmpty() && m_sessionId.isEmpty()) {
             return;
         }
-        // Read fresh state because another process may have saved since startup.
+        // All writers participate, including processes without the restore lock.
+        // Hold this lock from the fresh read through sync() so invalidation
+        // cannot delete an ID written between the comparison and the update.
+        QLockFile updateLock(m_restoreLock->fileName() + QLatin1String(".update"));
+        updateLock.setStaleLockTime(0);
+        if (!updateLock.tryLock(1000)) {
+            qWarning() << "Failed to lock native Wayland session state in" << m_config->name();
+            return;
+        }
         KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
-        // Keep the parent mutable so its subgroup supports writing and sync().
         KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         KConfigGroup group = sessions.group(m_environment);
         const QString savedId = group.readEntry(m_appId, QString());
