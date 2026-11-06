@@ -109,7 +109,6 @@ protected:
             deleteLater();
             return false;
         }
-        m_sessionId = qApp->sessionId();
         // Save only on shutdown so startup cannot overwrite a just-closed session.
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
             saveSessionId();
@@ -151,6 +150,7 @@ private:
         // Only one process restores the saved session; the others keep their
         // independent Qt sessions and may still save them on exit.
         if (!m_restoreLock->tryLock(0)) {
+            m_sessionId = qApp->sessionId();
             return true;
         }
 
@@ -167,6 +167,7 @@ private:
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
             delete previous;
         }
+        m_sessionId = qApp->sessionId();
         return true;
     }
 
