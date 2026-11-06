@@ -29,6 +29,32 @@
 
 namespace
 {
+// Keep separate persistence scopes for different machines, desktops and
+// Wayland socket paths, while allowing reuse across logins.
+QString sessionEnvironmentKey(const QString &runtimePath)
+{
+    QByteArray machine = QSysInfo::machineUniqueId();
+    if (machine.isEmpty()) {
+        machine = QSysInfo::machineHostName().toUtf8();
+    }
+    const QByteArray desktop = qgetenv("XDG_CURRENT_DESKTOP");
+
+    QString socketPath = qEnvironmentVariable("WAYLAND_DISPLAY");
+    if (socketPath.isEmpty()) {
+        socketPath = QStringLiteral("wayland-0");
+    }
+    if (QDir::isRelativePath(socketPath)) {
+        socketPath = QDir(runtimePath).absoluteFilePath(socketPath);
+    }
+    const QString canonicalPath = QFileInfo(socketPath).canonicalFilePath();
+    if (!canonicalPath.isEmpty()) {
+        socketPath = canonicalPath;
+    }
+
+    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8();
+    return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
+}
+
 class NativeSessionPersistence : public QObject
 {
 public:
@@ -93,25 +119,7 @@ private:
         if (runtimePath.isEmpty()) {
             return;
         }
-        QString displayPath = qEnvironmentVariable("WAYLAND_DISPLAY");
-        if (displayPath.isEmpty()) {
-            displayPath = QStringLiteral("wayland-0");
-        }
-        if (QDir::isRelativePath(displayPath)) {
-            displayPath = QDir(runtimePath).absoluteFilePath(displayPath);
-        }
-        const QString canonicalDisplay = QFileInfo(displayPath).canonicalFilePath();
-        if (!canonicalDisplay.isEmpty()) {
-            displayPath = canonicalDisplay;
-        }
-        // Reuse the scope while the machine, desktop and socket path stay the
-        // same. A socket-path change selects a new scope; avoid per-login IDs.
-        QByteArray machine = QSysInfo::machineUniqueId();
-        if (machine.isEmpty()) {
-            machine = QSysInfo::machineHostName().toUtf8();
-        }
-        const QByteArray environment = machine + '\0' + qgetenv("XDG_CURRENT_DESKTOP") + '\0' + QDir::cleanPath(displayPath).toUtf8();
-        m_environment = QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
+        m_environment = sessionEnvironmentKey(runtimePath);
 
         m_config = KSharedConfig::openStateConfig();
         m_appId = appId;
