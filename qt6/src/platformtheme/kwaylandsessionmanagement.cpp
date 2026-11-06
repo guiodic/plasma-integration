@@ -80,10 +80,6 @@ public:
         : QObject(parent)
     {
         qApp->installEventFilter(this);
-        // Save only on shutdown so startup cannot overwrite a just-closed session.
-        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
-            saveSessionId();
-        });
     }
 
 protected:
@@ -109,33 +105,40 @@ protected:
         // Never retry after an eligible window, even if initialization
         // returns early: the window may acquire its xdg_toplevel next.
         qApp->removeEventFilter(this);
-        initialize();
+        if (!initialize()) {
+            deleteLater();
+            return false;
+        }
+        // Save only on shutdown so startup cannot overwrite a just-closed session.
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+            saveSessionId();
+        });
         return false;
     }
 
 private:
-    void initialize()
+    bool initialize()
     {
         auto *application = QGuiApplicationPrivate::instance();
         if (!application->session_manager) {
-            return;
+            return false;
         }
         if (qApp->testAttribute(Qt::AA_DisableSessionManager) || qApp->isSessionRestored()) {
-            return;
+            return false;
         }
         const QString appId = QGuiApplication::desktopFileName().isEmpty() ? QCoreApplication::applicationName() : QGuiApplication::desktopFileName();
         if (appId.isEmpty()) {
-            return;
+            return false;
         }
 
         // A passed connection FD can bypass WAYLAND_DISPLAY. Skip persistence
         // rather than assign it to an unrelated/default socket path.
         if (qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
-            return;
+            return false;
         }
         const QString runtimePath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
         if (runtimePath.isEmpty()) {
-            return;
+            return false;
         }
         m_environment = sessionEnvironmentKey(runtimePath);
 
@@ -149,7 +152,7 @@ private:
         // processes retain their independent Qt sessions and save on exit.
         // A saved ID can be restored even before Qt receives the new session's ID.
         if (!m_restoreLock->tryLock(0)) {
-            return;
+            return true;
         }
 
         // The shared config may have been cached before another process saved.
@@ -165,11 +168,12 @@ private:
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
             delete previous;
         }
+        return true;
     }
 
     void saveSessionId()
     {
-        if (!m_restoreLock || !QGuiApplicationPrivate::instance()->session_manager) {
+        if (!QGuiApplicationPrivate::instance()->session_manager) {
             return;
         }
         const QString id = qApp->sessionId();
