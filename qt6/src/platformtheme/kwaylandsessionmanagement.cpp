@@ -55,6 +55,24 @@ QString sessionEnvironmentKey(const QString &runtimePath)
     return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
 }
 
+QString sessionRestoreLockPath(const KSharedConfig::Ptr &config, const QString &appId, const QString &environment, const QString &runtimePath)
+{
+    QString configPath = config->name();
+    if (QDir::isRelativePath(configPath)) {
+        configPath = QDir(QStandardPaths::writableLocation(config->locationType())).absoluteFilePath(configPath);
+    }
+    const QFileInfo configFileInfo(configPath);
+    QString canonicalPath = configFileInfo.canonicalFilePath();
+    if (canonicalPath.isEmpty()) {
+        // The state file need not exist on the application's first run.
+        const QString directory = configFileInfo.dir().canonicalPath();
+        canonicalPath = directory.isEmpty() ? configFileInfo.absoluteFilePath() : QDir(directory).filePath(configFileInfo.fileName());
+    }
+    const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId + QLatin1Char('/') + environment).toUtf8();
+    const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+    return runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock");
+}
+
 class NativeSessionPersistence : public QObject
 {
 public:
@@ -123,20 +141,7 @@ private:
 
         m_config = KSharedConfig::openStateConfig();
         m_appId = appId;
-        QString configPath = m_config->name();
-        if (QDir::isRelativePath(configPath)) {
-            configPath = QDir(QStandardPaths::writableLocation(m_config->locationType())).absoluteFilePath(configPath);
-        }
-        const QFileInfo configFile(configPath);
-        QString canonicalPath = configFile.canonicalFilePath();
-        if (canonicalPath.isEmpty()) {
-            // The state file need not exist on the application's first run.
-            const QString directory = configFile.dir().canonicalPath();
-            canonicalPath = directory.isEmpty() ? configFile.absoluteFilePath() : QDir(directory).filePath(configFile.fileName());
-        }
-        const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId + QLatin1Char('/') + m_environment).toUtf8();
-        const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
-        m_restoreLock = std::make_unique<QLockFile>(runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock"));
+        m_restoreLock = std::make_unique<QLockFile>(sessionRestoreLockPath(m_config, appId, m_environment, runtimePath));
         // Keep live restoration locks valid regardless of age. QLockFile still
         // detects a terminated owner and can recover its stale lock file.
         m_restoreLock->setStaleLockTime(0);
