@@ -55,12 +55,18 @@ QString sessionEnvironmentKey(const QString &runtimePath)
     return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
 }
 
-QString sessionRestoreLockPath(const KSharedConfig::Ptr &config, const QString &appId, const QString &environment, const QString &runtimePath)
+QString stateConfigPath()
 {
-    QString configPath = config->name();
-    if (QDir::isRelativePath(configPath)) {
-        configPath = QDir(QStandardPaths::writableLocation(config->locationType())).absoluteFilePath(configPath);
+    const auto config = KSharedConfig::openStateConfig();
+    const QString name = config->name();
+    if (QDir::isAbsolutePath(name)) {
+        return name;
     }
+    return QDir(QStandardPaths::writableLocation(config->locationType())).absoluteFilePath(name);
+}
+
+QString sessionRestoreLockPath(const QString &configPath, const QString &appId, const QString &environment, const QString &runtimePath)
+{
     const QFileInfo configFileInfo(configPath);
     QString canonicalPath = configFileInfo.canonicalFilePath();
     if (canonicalPath.isEmpty()) {
@@ -142,9 +148,9 @@ private:
         }
         m_environment = sessionEnvironmentKey(runtimePath);
 
-        m_config = KSharedConfig::openStateConfig();
+        m_stateConfigPath = stateConfigPath();
         m_appId = appId;
-        m_restoreLock = std::make_unique<QLockFile>(sessionRestoreLockPath(m_config, appId, m_environment, runtimePath));
+        m_restoreLock = std::make_unique<QLockFile>(sessionRestoreLockPath(m_stateConfigPath, appId, m_environment, runtimePath));
         // Disable age-based expiry; QLockFile still recovers locks of dead owners.
         m_restoreLock->setStaleLockTime(0);
         // Only one process restores the saved session; the others keep their
@@ -156,14 +162,16 @@ private:
 
         // The shared config may have been cached before another process saved.
         // Read independently without reparsing the application's shared object.
-        KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
+        KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         const QString savedId = sessions.group(m_environment).readEntry(appId, QString());
         if (!savedId.isEmpty() && savedId != qApp->sessionId()) {
             auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
             auto *previous = manager->platformSessionManager;
-            // Qt 6.12 has no public session-ID setter. Replace the native backend
-            // before the first xdg_toplevel is associated with it.
+            // Qt has already requested a new session from the compositor and
+            // exposes its ID through qApp->sessionId(). Qt 6.12 has no public
+            // setter, so replace the backend to request the saved session before
+            // any xdg_toplevel is associated with it. On exit, save the current ID.
             manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
             delete previous;
         }
@@ -186,10 +194,10 @@ private:
         QLockFile updateLock(m_restoreLock->fileName() + QLatin1String(".update"));
         updateLock.setStaleLockTime(0);
         if (!updateLock.tryLock(1000)) {
-            qWarning() << "Failed to lock native Wayland session state in" << m_config->name();
+            qWarning() << "Failed to lock native Wayland session state in" << m_stateConfigPath;
             return;
         }
-        KConfig config(m_config->name(), KConfig::NoGlobals, m_config->locationType());
+        KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         KConfigGroup group = sessions.group(m_environment);
         const QString savedId = group.readEntry(m_appId, QString());
@@ -214,7 +222,7 @@ private:
         }
     }
 
-    KSharedConfig::Ptr m_config;
+    QString m_stateConfigPath;
     QString m_appId;
     QString m_sessionId;
     QString m_environment;
