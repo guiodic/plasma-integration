@@ -193,8 +193,7 @@ private:
         if (!QGuiApplicationPrivate::instance()->session_manager) {
             return;
         }
-        const QString id = qApp->sessionId();
-        if (id.isEmpty() && m_sessionId.isEmpty()) {
+        if (m_sessionId.isEmpty()) {
             return;
         }
         // All writers participate, including processes without the restore lock.
@@ -209,22 +208,22 @@ private:
         KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         KConfigGroup group = sessions.group(m_environment);
-        const QString savedId = group.readEntry(m_appId, QString());
-        if (id.isEmpty()) {
+        const QString savedSessionId = group.readEntry(m_appId, QString());
+        if (qApp->sessionId().isEmpty()) {
             // Qt clears a previously assigned ID when the compositor replaces
             // our session, e.g. after an explicit -session launch bypasses the
             // restore lock. Do not let a later launch take that session back.
             // Only invalidate our own ID; another process may have saved a
             // different session since we started.
-            if (savedId != m_sessionId) {
+            if (savedSessionId != m_sessionId) {
                 return;
             }
             group.deleteEntry(m_appId);
         } else {
-            if (savedId == id) {
+            if (savedSessionId == m_sessionId) {
                 return;
             }
-            group.writeEntry(m_appId, id);
+            group.writeEntry(m_appId, m_sessionId);
         }
         if (!group.sync()) {
             qWarning() << "Failed to persist native Wayland session ID in" << config.name();
