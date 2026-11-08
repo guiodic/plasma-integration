@@ -79,6 +79,11 @@ QString sessionRestoreLockPath(const QString &configPath, const QString &appId, 
     return runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock");
 }
 
+// The compositor assigns session IDs, but Qt does not automatically reconnect
+// a new application launch to its previously saved session. Persist the ID
+// under the application identity so a later launch can request restoration.
+// Keep separate IDs for each machine, desktop and Wayland display, since the
+// same application can have independent sessions in those environments.
 class NativeSessionPersistence : public QObject
 {
 public:
