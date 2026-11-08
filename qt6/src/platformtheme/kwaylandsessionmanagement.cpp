@@ -29,8 +29,8 @@
 
 namespace
 {
-// Keep separate persistence scopes for different machines, desktops and
-// Wayland socket paths, while allowing reuse across logins.
+// Keep separate persistence scopes for different machines, desktops, Wayland
+// sockets and runtime directories, while allowing reuse across logins.
 QString sessionEnvironmentKey(const QString &runtimePath)
 {
     QByteArray machine = QSysInfo::machineUniqueId();
@@ -51,7 +51,11 @@ QString sessionEnvironmentKey(const QString &runtimePath)
         socketPath = canonicalPath;
     }
 
-    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8();
+    // Distinct runtime directories keep independent sessions even when they
+    // share the state file and connect to the same absolute Wayland socket.
+    const QString canonicalRuntimePath = QFileInfo(runtimePath).canonicalFilePath();
+    const QString runtimeDirectory = canonicalRuntimePath.isEmpty() ? QDir::cleanPath(runtimePath) : canonicalRuntimePath;
+    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8() + '\0' + runtimeDirectory.toUtf8();
     return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
 }
 
@@ -82,8 +86,8 @@ QString sessionRestoreLockPath(const QString &configPath, const QString &appId, 
 // The compositor assigns session IDs, but Qt does not automatically reconnect
 // a new application launch to its previously saved session. Persist the ID
 // under the application identity so a later launch can request restoration.
-// Keep separate IDs for each machine, desktop and Wayland display, since the
-// same application can have independent sessions in those environments.
+// Keep separate IDs for each machine, desktop, Wayland display and runtime
+// directory, since the same application can have independent sessions in them.
 class NativeSessionPersistence : public QObject
 {
 public:
