@@ -159,22 +159,36 @@ private:
 
         m_stateConfigPath = stateConfigPath();
         m_appId = appId;
-        m_restoreLock = std::make_unique<QLockFile>(sessionRestoreLockPath(m_stateConfigPath, appId, m_environment, runtimePath));
-        // Disable age-based expiry; QLockFile still recovers locks of dead owners.
-        m_restoreLock->setStaleLockTime(0);
-        // Only one process restores the saved session; the others keep their
-        // independent Qt sessions and may still save them on exit.
-        if (!m_restoreLock->tryLock(0)) {
-            m_sessionId = qApp->sessionId();
+        const QString lockPath = sessionRestoreLockPath(m_stateConfigPath, appId, m_environment, runtimePath);
+        m_updateLockPath = lockPath + QLatin1String(".update");
+        const auto acquireSessionLock = [&](const QString &id) {
+            if (id.isEmpty()) {
+                return false;
+            }
+            const QString key = QString::fromLatin1(QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
+            const QString path = lockPath + QLatin1Char('.') + key + QLatin1String(".session");
+            if (m_restoreLock && m_restoreLock->fileName() == path) {
+                return true;
+            }
+            auto lock = std::make_unique<QLockFile>(path);
+            // Disable age-based expiry; dead owners can still be recovered.
+            lock->setStaleLockTime(0);
+            if (!lock->tryLock(0)) {
+                return false;
+            }
+            m_restoreLock = std::move(lock);
             return true;
-        }
+        };
 
         // The shared config may have been cached before another process saved.
         // Read independently without reparsing the application's shared object.
         KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
         const QString savedId = sessions.group(m_environment).readEntry(appId, QString());
-        if (!savedId.isEmpty() && savedId != qApp->sessionId()) {
+        // Protect the saved ID, not the whole application: another process may
+        // still be running with a different session. Keep Qt's fresh session if
+        // the saved one is occupied.
+        if (!savedId.isEmpty() && acquireSessionLock(savedId) && savedId != qApp->sessionId()) {
             auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
             auto *previous = manager->platformSessionManager;
             // Qt has already requested a new session from the compositor and
@@ -185,7 +199,9 @@ private:
             delete previous;
         }
         m_sessionId = qApp->sessionId();
-        return true;
+        // Also protect fresh sessions, including a different ID returned by
+        // the compositor when the requested session cannot be restored.
+        return acquireSessionLock(m_sessionId);
     }
 
     void saveSessionId()
@@ -196,10 +212,10 @@ private:
         if (m_sessionId.isEmpty()) {
             return;
         }
-        // All writers participate, including processes without the restore lock.
+        // Writers of all session IDs share the same update lock.
         // Hold this lock from the fresh read through sync() so invalidation
         // cannot delete an ID written between the comparison and the update.
-        QLockFile updateLock(m_restoreLock->fileName() + QLatin1String(".update"));
+        QLockFile updateLock(m_updateLockPath);
         updateLock.setStaleLockTime(0);
         if (!updateLock.tryLock(1000)) {
             qWarning() << "Failed to lock native Wayland session state in" << m_stateConfigPath;
@@ -230,6 +246,7 @@ private:
         }
     }
 
+    QString m_updateLockPath;
     QString m_stateConfigPath;
     QString m_appId;
     QString m_sessionId;
