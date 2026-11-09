@@ -13,6 +13,7 @@
 #include <QFileInfo>
 #include <QLockFile>
 #include <QPlatformSurfaceEvent>
+#include <QScreen>
 #include <QSessionManager>
 #include <QStandardPaths>
 #include <QSysInfo>
@@ -29,8 +30,26 @@
 
 namespace
 {
+// Follow KWindowConfig's per-resolution policy for one screen. For multiple
+// screens, also include the connector names used for selecting the monitor.
+QString screenConfigurationKey()
+{
+    const auto screens = QGuiApplication::screens();
+    if (screens.size() == 1) {
+        const QSize size = screens.first()->geometry().size();
+        return QStringLiteral("%1x%2 screen").arg(size.width()).arg(size.height());
+    }
+    QStringList names;
+    for (const auto *screen : screens) {
+        names.append(screen->name());
+    }
+    // Screen enumeration order must not select a different session.
+    names.sort();
+    return QStringLiteral("%1 screens: %2").arg(screens.size()).arg(names.join(QLatin1Char(' ')));
+}
+
 // Keep separate persistence scopes for different machines, desktops, Wayland
-// sockets and runtime directories, while allowing reuse across logins.
+// sockets, runtime directories and screen configurations, allowing reuse across logins.
 QString sessionEnvironmentKey(const QString &runtimePath)
 {
     QByteArray machine = QSysInfo::machineUniqueId();
@@ -55,7 +74,8 @@ QString sessionEnvironmentKey(const QString &runtimePath)
     // share the state file and connect to the same absolute Wayland socket.
     const QString canonicalRuntimePath = QFileInfo(runtimePath).canonicalFilePath();
     const QString runtimeDirectory = canonicalRuntimePath.isEmpty() ? QDir::cleanPath(runtimePath) : canonicalRuntimePath;
-    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8() + '\0' + runtimeDirectory.toUtf8();
+    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8() + '\0' + runtimeDirectory.toUtf8() + '\0'
+        + screenConfigurationKey().toUtf8();
     return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
 }
 
@@ -87,7 +107,8 @@ QString sessionRestoreLockPath(const QString &configPath, const QString &appId, 
 // a new application launch to its previously saved session. Persist the ID
 // under the application identity so a later launch can request restoration.
 // Keep separate IDs for each machine, desktop, Wayland display and runtime
-// directory, since the same application can have independent sessions in them.
+// directory and screen configuration, since the same application can have
+// independent sessions in them.
 class NativeSessionPersistence : public QObject
 {
 public:
@@ -155,6 +176,8 @@ private:
         if (runtimePath.isEmpty()) {
             return false;
         }
+        // Select the scope at launch. Output changes while running do not
+        // reassign existing toplevels to a different session.
         m_environment = sessionEnvironmentKey(runtimePath);
 
         m_stateConfigPath = stateConfigPath();
