@@ -138,7 +138,7 @@ private:
         if (!application->session_manager) {
             return false;
         }
-        if (qApp->testAttribute(Qt::AA_DisableSessionManager) || qApp->isSessionRestored()) {
+        if (qApp->testAttribute(Qt::AA_DisableSessionManager)) {
             return false;
         }
         const QString appId = QGuiApplication::desktopFileName().isEmpty() ? QCoreApplication::applicationName() : QGuiApplication::desktopFileName();
@@ -179,6 +179,14 @@ private:
             m_restoreLock = std::move(lock);
             return true;
         };
+
+        if (qApp->isSessionRestored()) {
+            // Qt has already selected the explicit -session ID. Protect and
+            // persist it too, so an ordinary launch cannot take it over and
+            // later launches can restore it after this process exits.
+            m_sessionId = qApp->sessionId();
+            return acquireSessionLock(m_sessionId);
+        }
 
         // The shared config may have been cached before another process saved.
         // Read independently without reparsing the application's shared object.
