@@ -13,10 +13,8 @@
 #include <QFileInfo>
 #include <QLockFile>
 #include <QPlatformSurfaceEvent>
-#include <QScreen>
 #include <QSessionManager>
 #include <QStandardPaths>
-#include <QSysInfo>
 #include <QWindow>
 #include <private/qguiapplication_p.h>
 #include <private/qsessionmanager_p.h>
@@ -30,55 +28,6 @@
 
 namespace
 {
-// Follow KWindowConfig's per-resolution policy for one screen. For multiple
-// screens, also include the connector names used for selecting the monitor.
-QString screenConfigurationKey()
-{
-    const auto screens = QGuiApplication::screens();
-    if (screens.size() == 1) {
-        const QSize size = screens.first()->geometry().size();
-        return QStringLiteral("%1x%2 screen").arg(size.width()).arg(size.height());
-    }
-    QStringList names;
-    for (const auto *screen : screens) {
-        names.append(screen->name());
-    }
-    // Screen enumeration order must not select a different session.
-    names.sort();
-    return QStringLiteral("%1 screens: %2").arg(screens.size()).arg(names.join(QLatin1Char(' ')));
-}
-
-// Keep separate persistence scopes for different machines, desktops, Wayland
-// sockets, runtime directories and screen configurations, allowing reuse across logins.
-QString sessionEnvironmentKey(const QString &runtimePath)
-{
-    QByteArray machine = QSysInfo::machineUniqueId();
-    if (machine.isEmpty()) {
-        machine = QSysInfo::machineHostName().toUtf8();
-    }
-    const QByteArray desktop = qgetenv("XDG_CURRENT_DESKTOP");
-
-    QString socketPath = qEnvironmentVariable("WAYLAND_DISPLAY");
-    if (socketPath.isEmpty()) {
-        socketPath = QStringLiteral("wayland-0");
-    }
-    if (QDir::isRelativePath(socketPath)) {
-        socketPath = QDir(runtimePath).absoluteFilePath(socketPath);
-    }
-    const QString canonicalPath = QFileInfo(socketPath).canonicalFilePath();
-    if (!canonicalPath.isEmpty()) {
-        socketPath = canonicalPath;
-    }
-
-    // Distinct runtime directories keep independent sessions even when they
-    // share the state file and connect to the same absolute Wayland socket.
-    const QString canonicalRuntimePath = QFileInfo(runtimePath).canonicalFilePath();
-    const QString runtimeDirectory = canonicalRuntimePath.isEmpty() ? QDir::cleanPath(runtimePath) : canonicalRuntimePath;
-    const QByteArray environment = machine + '\0' + desktop + '\0' + QDir::cleanPath(socketPath).toUtf8() + '\0' + runtimeDirectory.toUtf8() + '\0'
-        + screenConfigurationKey().toUtf8();
-    return QString::fromLatin1(QCryptographicHash::hash(environment, QCryptographicHash::Sha256).toHex());
-}
-
 QString stateConfigPath()
 {
     const auto config = KSharedConfig::openStateConfig();
@@ -89,7 +38,7 @@ QString stateConfigPath()
     return QDir(QStandardPaths::writableLocation(config->locationType())).absoluteFilePath(name);
 }
 
-QString sessionRestoreLockPath(const QString &configPath, const QString &appId, const QString &environment, const QString &runtimePath)
+QString sessionRestoreLockPath(const QString &configPath, const QString &appId, const QString &runtimePath)
 {
     const QFileInfo configFileInfo(configPath);
     QString canonicalPath = configFileInfo.canonicalFilePath();
@@ -98,7 +47,7 @@ QString sessionRestoreLockPath(const QString &configPath, const QString &appId, 
         const QString directory = configFileInfo.dir().canonicalPath();
         canonicalPath = directory.isEmpty() ? configFileInfo.absoluteFilePath() : QDir(directory).filePath(configFileInfo.fileName());
     }
-    const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId + QLatin1Char('/') + environment).toUtf8();
+    const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId).toUtf8();
     const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
     return runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock");
 }
@@ -106,9 +55,7 @@ QString sessionRestoreLockPath(const QString &configPath, const QString &appId, 
 // The compositor assigns session IDs, but Qt does not automatically reconnect
 // a new application launch to its previously saved session. Persist the ID
 // under the application identity so a later launch can request restoration.
-// Keep separate IDs for each machine, desktop, Wayland display and runtime
-// directory and screen configuration, since the same application can have
-// independent sessions in them.
+// Leave environment-dependent restoration policy to the compositor.
 class NativeSessionPersistence : public QObject
 {
 public:
@@ -167,22 +114,13 @@ private:
             return false;
         }
 
-        // A passed connection FD can bypass WAYLAND_DISPLAY. Skip persistence
-        // rather than assign it to an unrelated/default socket path.
-        if (qEnvironmentVariableIsSet("WAYLAND_SOCKET")) {
-            return false;
-        }
         const QString runtimePath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
         if (runtimePath.isEmpty()) {
             return false;
         }
-        // Select the scope at launch. Output changes while running do not
-        // reassign existing toplevels to a different session.
-        m_environment = sessionEnvironmentKey(runtimePath);
-
         m_stateConfigPath = stateConfigPath();
         m_appId = appId;
-        const QString lockPath = sessionRestoreLockPath(m_stateConfigPath, appId, m_environment, runtimePath);
+        const QString lockPath = sessionRestoreLockPath(m_stateConfigPath, appId, runtimePath);
         m_updateLockPath = lockPath + QLatin1String(".update");
         const auto acquireSessionLock = [&](const QString &id) {
             if (id.isEmpty()) {
@@ -215,7 +153,7 @@ private:
         // Read independently without reparsing the application's shared object.
         KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
-        const QString savedId = sessions.group(m_environment).readEntry(appId, QString());
+        const QString savedId = sessions.readEntry(appId, QString());
         // Protect the saved ID, not the whole application: another process may
         // still be running with a different session. Keep Qt's fresh session if
         // the saved one is occupied.
@@ -253,8 +191,7 @@ private:
             return;
         }
         KConfig config(m_stateConfigPath, KConfig::NoGlobals);
-        KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
-        KConfigGroup group = sessions.group(m_environment);
+        KConfigGroup group(&config, QStringLiteral("XdgSessionManagement"));
         const QString savedSessionId = group.readEntry(m_appId, QString());
         if (qApp->sessionId().isEmpty()) {
             // Qt clears a previously assigned ID when the compositor replaces
@@ -281,7 +218,6 @@ private:
     QString m_stateConfigPath;
     QString m_appId;
     QString m_sessionId;
-    QString m_environment;
     std::unique_ptr<QLockFile> m_restoreLock;
 };
 }
