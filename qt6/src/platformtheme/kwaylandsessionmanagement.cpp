@@ -121,7 +121,6 @@ private:
         m_stateConfigPath = stateConfigPath();
         m_appId = appId;
         const QString lockPath = sessionRestoreLockPath(m_stateConfigPath, appId, runtimePath);
-        m_updateLockPath = lockPath + QLatin1String(".update");
         const auto acquireSessionLock = [&](const QString &id) {
             if (id.isEmpty()) {
                 return false;
@@ -178,43 +177,23 @@ private:
         if (!QGuiApplicationPrivate::instance()->session_manager) {
             return;
         }
-        if (m_sessionId.isEmpty()) {
-            return;
-        }
-        // Writers of all session IDs share the same update lock.
-        // Hold this lock from the fresh read through sync() so invalidation
-        // cannot delete an ID written between the comparison and the update.
-        QLockFile updateLock(m_updateLockPath);
-        updateLock.setStaleLockTime(0);
-        if (!updateLock.tryLock(1000)) {
-            qWarning() << "Failed to lock native Wayland session state in" << m_stateConfigPath;
+        // Do not save an ID that Qt no longer owns. Coordinating live session
+        // takeover and invalidating its persisted state are outside our scope.
+        if (m_sessionId.isEmpty() || qApp->sessionId().isEmpty()) {
             return;
         }
         KConfig config(m_stateConfigPath, KConfig::NoGlobals);
         KConfigGroup group(&config, QStringLiteral("XdgSessionManagement"));
         const QString savedSessionId = group.readEntry(m_appId, QString());
-        if (qApp->sessionId().isEmpty()) {
-            // Qt clears a previously assigned ID when the compositor replaces
-            // our session, e.g. after an explicit -session launch bypasses the
-            // restore lock. Do not let a later launch take that session back.
-            // Only invalidate our own ID; another process may have saved a
-            // different session since we started.
-            if (savedSessionId != m_sessionId) {
-                return;
-            }
-            group.deleteEntry(m_appId);
-        } else {
-            if (savedSessionId == m_sessionId) {
-                return;
-            }
-            group.writeEntry(m_appId, m_sessionId);
+        if (savedSessionId == m_sessionId) {
+            return;
         }
+        group.writeEntry(m_appId, m_sessionId);
         if (!group.sync()) {
             qWarning() << "Failed to persist native Wayland session ID in" << config.name();
         }
     }
 
-    QString m_updateLockPath;
     QString m_stateConfigPath;
     QString m_appId;
     QString m_sessionId;
