@@ -1,0 +1,214 @@
+/*
+    SPDX-License-Identifier: LGPL-2.0-only OR LGPL-3.0-only OR LicenseRef-KDE-Accepted-LGPL
+*/
+
+#include "kwaylandsessionmanagement.h"
+
+#include <QGuiApplication>
+
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0) && !defined(QT_NO_SESSIONMANAGER)
+#include <QCryptographicHash>
+#include <QDebug>
+#include <QDir>
+#include <QFileInfo>
+#include <QLockFile>
+#include <QPlatformSurfaceEvent>
+#include <QSessionManager>
+#include <QStandardPaths>
+#include <QWindow>
+#include <private/qguiapplication_p.h>
+#include <private/qsessionmanager_p.h>
+#include <qpa/qplatformintegration.h>
+#include <qpa/qplatformsessionmanager.h>
+
+#include <KConfigGroup>
+#include <KSharedConfig>
+
+#include <memory>
+
+namespace
+{
+QString stateConfigPath()
+{
+    const auto config = KSharedConfig::openStateConfig();
+    const QString name = config->name();
+    if (QDir::isAbsolutePath(name)) {
+        return name;
+    }
+    return QDir(QStandardPaths::writableLocation(config->locationType())).absoluteFilePath(name);
+}
+
+QString sessionRestoreLockPath(const QString &configPath, const QString &appId, const QString &runtimePath)
+{
+    const QFileInfo configFileInfo(configPath);
+    QString canonicalPath = configFileInfo.canonicalFilePath();
+    if (canonicalPath.isEmpty()) {
+        // The state file need not exist on the application's first run.
+        const QString directory = configFileInfo.dir().canonicalPath();
+        canonicalPath = directory.isEmpty() ? configFileInfo.absoluteFilePath() : QDir(directory).filePath(configFileInfo.fileName());
+    }
+    const QByteArray identity = (QDir::cleanPath(canonicalPath) + QLatin1Char('/') + appId).toUtf8();
+    const QString lockName = QString::fromLatin1(QCryptographicHash::hash(identity, QCryptographicHash::Sha256).toHex());
+    return runtimePath + QLatin1String("/plasma-qt-session-") + lockName + QLatin1String(".lock");
+}
+
+// The compositor assigns session IDs, but Qt does not automatically reconnect
+// a new application launch to its previously saved session. Persist the ID
+// under the application identity so a later launch can request restoration.
+// Leave environment-dependent restoration policy to the compositor.
+class NativeSessionPersistence : public QObject
+{
+public:
+    explicit NativeSessionPersistence(QObject *parent)
+        : QObject(parent)
+    {
+        qApp->installEventFilter(this);
+    }
+
+protected:
+    bool eventFilter(QObject *object, QEvent *event) override
+    {
+        if (event->type() != QEvent::PlatformSurface) {
+            return false;
+        }
+        const auto *surfaceEvent = static_cast<QPlatformSurfaceEvent *>(event);
+        if (surfaceEvent->surfaceEventType() != QPlatformSurfaceEvent::SurfaceCreated) {
+            return false;
+        }
+        const auto *window = qobject_cast<QWindow *>(object);
+        if (!window || window->parent()) {
+            return false;
+        }
+        if (window->flags().testFlag(Qt::ForeignWindow) || window->type() == Qt::Popup || window->type() == Qt::ToolTip) {
+            return false;
+        }
+
+        // Qt 6.12 Wayland creates the wl_surface in the platform window
+        // constructor, but defers the xdg_toplevel until setVisible().
+        // Never retry after an eligible window, even if initialization
+        // returns early: the window may acquire its xdg_toplevel next.
+        qApp->removeEventFilter(this);
+        if (!initialize()) {
+            deleteLater();
+            return false;
+        }
+        // Save only on shutdown so startup cannot overwrite a just-closed session.
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] {
+            saveSessionId();
+        });
+        return false;
+    }
+
+private:
+    bool initialize()
+    {
+        auto *application = QGuiApplicationPrivate::instance();
+        if (!application->session_manager) {
+            return false;
+        }
+        if (qApp->testAttribute(Qt::AA_DisableSessionManager)) {
+            return false;
+        }
+        const QString appId = QGuiApplication::desktopFileName().isEmpty() ? QCoreApplication::applicationName() : QGuiApplication::desktopFileName();
+        if (appId.isEmpty()) {
+            return false;
+        }
+
+        const QString runtimePath = QStandardPaths::writableLocation(QStandardPaths::RuntimeLocation);
+        if (runtimePath.isEmpty()) {
+            return false;
+        }
+        m_stateConfigPath = stateConfigPath();
+        m_appId = appId;
+        const QString lockPath = sessionRestoreLockPath(m_stateConfigPath, appId, runtimePath);
+        const auto acquireSessionLock = [&](const QString &id) {
+            if (id.isEmpty()) {
+                return false;
+            }
+            const QString key = QString::fromLatin1(QCryptographicHash::hash(id.toUtf8(), QCryptographicHash::Sha256).toHex());
+            const QString path = lockPath + QLatin1Char('.') + key + QLatin1String(".session");
+            if (m_restoreLock && m_restoreLock->fileName() == path) {
+                return true;
+            }
+            auto lock = std::make_unique<QLockFile>(path);
+            // Disable age-based expiry; dead owners can still be recovered.
+            lock->setStaleLockTime(0);
+            if (!lock->tryLock(0)) {
+                return false;
+            }
+            m_restoreLock = std::move(lock);
+            return true;
+        };
+
+        if (qApp->isSessionRestored()) {
+            // Qt has already selected the explicit -session ID. Protect and
+            // persist it too, so an ordinary launch cannot take it over and
+            // later launches can restore it after this process exits.
+            m_sessionId = qApp->sessionId();
+            return acquireSessionLock(m_sessionId);
+        }
+
+        // The shared config may have been cached before another process saved.
+        // Read independently without reparsing the application's shared object.
+        KConfig config(m_stateConfigPath, KConfig::NoGlobals);
+        const KConfigGroup sessions(&config, QStringLiteral("XdgSessionManagement"));
+        const QString savedId = sessions.readEntry(appId, QString());
+        // Protect the saved ID, not the whole application: another process may
+        // still be running with a different session. Keep Qt's fresh session if
+        // the saved one is occupied.
+        if (!savedId.isEmpty() && acquireSessionLock(savedId) && savedId != qApp->sessionId()) {
+            auto *manager = static_cast<QSessionManagerPrivate *>(QObjectPrivate::get(application->session_manager));
+            auto *previous = manager->platformSessionManager;
+            // Qt has already requested a new session from the compositor and
+            // exposes its ID through qApp->sessionId(). Qt 6.12 has no public
+            // setter, so replace the backend to request the saved session before
+            // any xdg_toplevel is associated with it. On exit, save the current ID.
+            manager->platformSessionManager = application->platformIntegration()->createPlatformSessionManager(savedId, qApp->sessionKey());
+            delete previous;
+        }
+        m_sessionId = qApp->sessionId();
+        // Also protect fresh sessions, including a different ID returned by
+        // the compositor when the requested session cannot be restored.
+        return acquireSessionLock(m_sessionId);
+    }
+
+    void saveSessionId()
+    {
+        if (!QGuiApplicationPrivate::instance()->session_manager) {
+            return;
+        }
+        // Do not save an ID that Qt no longer owns. Coordinating live session
+        // takeover and invalidating its persisted state are outside our scope.
+        if (m_sessionId.isEmpty() || qApp->sessionId().isEmpty()) {
+            return;
+        }
+        KConfig config(m_stateConfigPath, KConfig::NoGlobals);
+        KConfigGroup group(&config, QStringLiteral("XdgSessionManagement"));
+        const QString savedSessionId = group.readEntry(m_appId, QString());
+        if (savedSessionId == m_sessionId) {
+            return;
+        }
+        group.writeEntry(m_appId, m_sessionId);
+        if (!group.sync()) {
+            qWarning() << "Failed to persist native Wayland session ID in" << config.name();
+        }
+    }
+
+    QString m_stateConfigPath;
+    QString m_appId;
+    QString m_sessionId;
+    std::unique_ptr<QLockFile> m_restoreLock;
+};
+}
+#endif
+
+void initializeWaylandSessionManagement()
+{
+#if QT_VERSION >= QT_VERSION_CHECK(6, 12, 0) && !defined(QT_NO_SESSIONMANAGER)
+    constexpr auto property = "org.kde.plasma.integration.nativeSessionPersistence";
+    if (!qApp->property(property).toBool()) {
+        qApp->setProperty(property, true);
+        new NativeSessionPersistence(qApp);
+    }
+#endif
+}
